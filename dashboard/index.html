@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1220">
+  <title>SentinelX | Linux Monitoring</title>
+  <link rel="stylesheet" href="/dashboard/styles.css">
+  <script src="/dashboard/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/dashboard/" aria-label="SentinelX home">
+        <span class="brand-mark">S</span>
+        <span><strong>SentinelX</strong><small>LINUX OPERATIONS</small></span>
+      </a>
+      <div class="side-label">MONITORING</div>
+      <nav class="nav">
+        <a class="nav-link active" href="#overview" data-view="overview"><span>▦</span> Overview</a>
+        <a class="nav-link" href="#hosts" data-view="hosts"><span>▣</span> Hosts</a>
+        <a class="nav-link" href="#events" data-view="events"><span>◉</span> Security events <b id="nav-event-count">—</b></a>
+        <a class="nav-link" href="#processes" data-view="processes"><span>⌘</span> Processes</a>
+        <a class="nav-link" href="#network" data-view="network"><span>⌁</span> Network ports</a>
+        <a class="nav-link" href="#antivirus" data-view="antivirus"><span>⬡</span> Antivirus</a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="connection-indicator"><i id="connection-dot"></i><span id="connection-label">Connecting to API</span></div>
+        <small>Central monitoring · v0.1</small>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div><div class="eyebrow">LINUX FLEET / CENTRAL VIEW</div><h1 id="page-title">System overview</h1></div>
+        <div class="top-actions"><span class="updated">Last updated <strong id="last-updated">—</strong></span><button class="refresh-btn" id="refresh-btn" type="button">↻ <span>Refresh</span></button></div>
+      </header>
+
+      <section class="view active" id="view-overview">
+        <div class="welcome-row"><div><h2>Infrastructure at a glance</h2><p>Live health and security telemetry from your Linux endpoints.</p></div><span class="live-pill"><i></i> LIVE MONITORING</span></div>
+        <div class="metric-grid">
+          <article class="metric-card"><div class="metric-head"><span>Connected hosts</span><span class="metric-icon cyan">▣</span></div><div class="metric-value" id="host-count">—</div><div class="metric-foot">Reporting to central API</div></article>
+          <article class="metric-card"><div class="metric-head"><span>CPU utilization</span><span class="metric-icon violet">⌁</span></div><div class="metric-value"><span id="cpu-value">—</span><small>%</small></div><div class="meter"><i id="cpu-meter"></i></div><div class="metric-foot">Latest host sample</div></article>
+          <article class="metric-card"><div class="metric-head"><span>Memory utilization</span><span class="metric-icon blue">▤</span></div><div class="metric-value"><span id="memory-value">—</span><small>%</small></div><div class="meter"><i id="memory-meter"></i></div><div class="metric-foot" id="memory-foot">Latest host sample</div></article>
+          <article class="metric-card"><div class="metric-head"><span>Security events</span><span class="metric-icon amber">◉</span></div><div class="metric-value" id="event-count">—</div><div class="metric-foot">Events in recent activity feed</div></article>
+        </div>
+
+        <div class="content-grid">
+          <article class="panel chart-panel"><div class="panel-head"><div><h3>Resource utilization</h3><p>CPU and memory · recent samples</p></div><span class="chart-legend"><i class="legend-cpu"></i> CPU <i class="legend-memory"></i> Memory</span></div><canvas id="resource-chart" height="220" aria-label="CPU and memory utilization chart"></canvas></article>
+          <article class="panel host-panel"><div class="panel-head"><div><h3>Host status</h3><p>Latest reporting endpoints</p></div><a href="#hosts" class="text-link" data-view="hosts">View all →</a></div><div id="host-preview" class="host-list"><div class="empty">Waiting for host telemetry…</div></div></article>
+        </div>
+
+        <article class="panel"><div class="panel-head"><div><h3>Recent security activity</h3><p>Latest file and system events received by SentinelX</p></div><a href="#events" class="text-link" data-view="events">All events →</a></div><div class="table-wrap"><table><thead><tr><th>EVENT</th><th>HOST</th><th>SEVERITY</th><th>TIME</th></tr></thead><tbody id="overview-events"><tr><td colspan="4" class="empty">Loading events…</td></tr></tbody></table></div></article>
+      </section>
+
+      <section class="view" id="view-hosts"><div class="section-intro"><h2>Monitored hosts</h2><p>Host availability and latest system resource readings.</p></div><div id="hosts-grid" class="hosts-grid"><div class="panel empty">Loading hosts…</div></div></section>
+
+      <section class="view" id="view-events"><div class="section-intro"><h2>Security events</h2><p>File activity, model-file detection and rule-based system alerts.</p></div><div class="toolbar"><input id="event-search" type="search" placeholder="Search event, host or path…" aria-label="Search events"><select id="severity-filter" aria-label="Filter by severity"><option value="all">All severities</option><option>critical</option><option>high</option><option>medium</option><option>low</option><option>info</option></select></div><article class="panel"><div class="table-wrap"><table><thead><tr><th>EVENT</th><th>HOST</th><th>SEVERITY</th><th>DETAILS</th><th>TIME</th></tr></thead><tbody id="events-table"><tr><td colspan="5" class="empty">Loading events…</td></tr></tbody></table></div></article></section>
+
+      <section class="view" id="view-processes"><div class="section-intro"><h2>Running processes</h2><p>Process snapshot from the selected latest host report.</p></div><article class="panel"><div class="panel-head"><div><h3>Process inventory</h3><p id="process-subtitle">Select a reporting host to inspect its process snapshot.</p></div><select id="process-host" aria-label="Select host"></select></div><div class="table-wrap"><table><thead><tr><th>PID</th><th>PROCESS</th><th>USER</th><th>MEMORY</th><th>EXECUTABLE</th></tr></thead><tbody id="process-table"><tr><td colspan="5" class="empty">No process data available.</td></tr></tbody></table></div></article></section>
+
+      <section class="view" id="view-network"><div class="section-intro"><h2>Listening network ports</h2><p>Services currently listening on monitored Linux hosts.</p></div><article class="panel"><div class="panel-head"><div><h3>Socket inventory</h3><p>Listening TCP/UDP sockets reported by the agent.</p></div><select id="network-host" aria-label="Select host"></select></div><div class="table-wrap"><table><thead><tr><th>LOCAL ADDRESS</th><th>PORT</th><th>PID</th><th>PROTOCOL FAMILY</th><th>SOCKET TYPE</th></tr></thead><tbody id="network-table"><tr><td colspan="5" class="empty">No listening-port data available.</td></tr></tbody></table></div></article></section>
+
+      <section class="view" id="view-antivirus"><div class="section-intro"><h2>Antivirus status</h2><p>ClamAV binary availability and daemon state reported by each agent.</p></div><div id="antivirus-grid" class="hosts-grid"><div class="panel empty">Loading antivirus status…</div></div><p class="notice">SentinelX currently checks ClamAV executable presence and daemon activity. It does not claim that a malware scan or real-time protection test has been performed.</p></section>
+
+      <footer><span>SentinelX · Rule-based Linux monitoring</span><span>Data refreshes every 10 seconds · <a href="/docs" target="_blank" rel="noreferrer">API documentation ↗</a></span></footer>
+    </main>
+  </div>
+</body>
+</html>
