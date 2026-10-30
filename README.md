@@ -174,3 +174,16 @@ These are monitoring indicators, not proof of compromise. The first implementati
 ## Development principles
 
 Python + Linux native services. No Docker. No AI/ML. No Kubernetes. Rules and transparent threshold/event logic only.
+
+
+## Web dashboard
+
+The built-in dark-mode dashboard is served by FastAPI from the `dashboard/` directory.
+
+- Dashboard: `http://127.0.0.1:8000/dashboard/`
+- Root URL redirects to the dashboard: `http://127.0.0.1:8000/`
+- API documentation: `http://127.0.0.1:8000/docs`
+
+The dashboard refreshes telemetry every 10 seconds and displays host health, CPU, memory, disk usage, recent events, process inventory, listening ports, and ClamAV status. It uses the existing read-only GET endpoints and does not need a separate frontend build tool.
+
+Keep the API bound to `127.0.0.1` and access it through an SSH tunnel until a TLS reverse proxy and appropriate access controls are configured.
