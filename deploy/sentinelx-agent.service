@@ -1,0 +1,19 @@
+[Unit]
+Description=SentinelX Linux monitoring agent
+After=network-online.target sentinelx-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/sentinelx
+EnvironmentFile=/etc/sentinelx/sentinelx.env
+ExecStart=/opt/sentinelx/venv/bin/python /opt/sentinelx/agent/agent.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
