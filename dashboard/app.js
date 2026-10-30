@@ -1,6 +1,6 @@
 const API = "";
 const REFRESH_MS = 10000;
-const history = [];
+const resourceHistory = [];
 let hosts = [];
 let events = [];
 let selectedHost = "";
@@ -53,8 +53,8 @@ function renderOverview(summary) {
   $("memory-meter").style.width = (Number.isFinite(mem) ? Math.max(0,Math.min(100,mem)) : 0) + "%";
   $("memory-foot").textContent = latest.memory ? bytes(latest.memory.available_bytes) + " available" : "Latest host sample";
   const point = {cpu: Number.isFinite(cpu) ? cpu : 0, memory: Number.isFinite(mem) ? mem : 0};
-  history.push(point);
-  if (history.length > 30) history.shift();
+  resourceHistory.push(point);
+  if (resourceHistory.length > 30) resourceHistory.shift();
   drawChart();
   $("host-preview").innerHTML = hosts.length ? hosts.slice(0,4).map(host => {
     const online = isOnline(host.last_seen);
@@ -80,11 +80,11 @@ function drawChart() {
     ctx.strokeStyle = "#26374d"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(w-pad.r,y); ctx.stroke();
     ctx.fillStyle = "#7890ad"; ctx.fillText(v+"%",2,y+3);
   }
-  if (!history.length) return;
+  if (!resourceHistory.length) return;
   const drawLine = (key,color) => {
     ctx.beginPath();
-    history.forEach((p,i) => {
-      const x = pad.l + (history.length === 1 ? cw : cw*i/(history.length-1));
+    resourceHistory.forEach((p,i) => {
+      const x = pad.l + (resourceHistory.length === 1 ? cw : cw*i/(resourceHistory.length-1));
       const y = pad.t + ch*(1-Math.max(0,Math.min(100,p[key]))/100);
       if (!i) ctx.moveTo(x,y); else ctx.lineTo(x,y);
     });
@@ -164,7 +164,7 @@ async function refresh() {
     console.error("SentinelX dashboard refresh failed:",error);
   }
 }
-document.querySelectorAll("[data-view]").forEach(link=>link.addEventListener("click",e=>{e.preventDefault();const name=link.dataset.view;switchView(name);history.replaceState(null,"","#"+name);}));
+document.querySelectorAll("[data-view]").forEach(link=>link.addEventListener("click",e=>{e.preventDefault();const name=link.dataset.view;switchView(name);window.history.replaceState(null,"","#"+name);}));
 $("refresh-btn").addEventListener("click",refresh);
 $("event-search").addEventListener("input",renderEvents);
 $("severity-filter").addEventListener("change",renderEvents);
