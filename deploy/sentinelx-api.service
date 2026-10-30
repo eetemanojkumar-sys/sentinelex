@@ -1,0 +1,21 @@
+[Unit]
+Description=SentinelX FastAPI service
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=sentinelx
+Group=sentinelx
+WorkingDirectory=/opt/sentinelx
+EnvironmentFile=/etc/sentinelx/sentinelx.env
+ExecStart=/opt/sentinelx/venv/bin/uvicorn server.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
