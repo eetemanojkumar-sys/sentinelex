@@ -2,8 +2,11 @@
 import os
 from datetime import datetime, timezone
 from typing import Any
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Integer, JSON, String, create_engine, desc, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -51,6 +54,14 @@ app = FastAPI(
     version="0.1.0",
     description="Rule-based Linux health and security telemetry collector",
 )
+
+DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
+app.mount("/dashboard", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="dashboard")
+
+
+@app.get("/", include_in_schema=False)
+def dashboard_home():
+    return RedirectResponse(url="/dashboard/")
 
 
 class EventIn(BaseModel):
