@@ -265,7 +265,7 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
 
 
 @app.get("/api/v1/hosts")
-def hosts(_admin: bool = Depends(authenticate_admin), response: Response = None, limit: int = Query(default=100, ge=1, le=250),
+def hosts(response: Response, _admin: bool = Depends(authenticate_admin), limit: int = Query(default=100, ge=1, le=250),
           offset: int = Query(default=0, ge=0), search: str | None = None,
           db: Session = Depends(db_session)):
     query = select(HostLatest)
