@@ -1,4 +1,5 @@
 """SentinelX central telemetry API (rule-based; no AI/ML)."""
+import hmac
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -135,7 +136,7 @@ def db_session():
 
 
 def verify_agent(token: str | None):
-    if not token or token != TOKEN:
+    if not token or not hmac.compare_digest(token, TOKEN):
         raise HTTPException(status_code=401, detail="Invalid agent token")
 
 
@@ -238,8 +239,6 @@ def events(limit: int = 100, db: Session = Depends(db_session)):
 
 
 @app.get("/api/v1/disk-history")
-# Fail closed: these legacy queries are not yet tenant-scoped.
-# The dependency intentionally blocks access until migration and isolation tests are complete.
 def disk_history(host_id: str, mountpoint: str, limit: int = 60,
                  db: Session = Depends(db_session)):
     """Return recent stored disk-usage samples for one host and mount point."""
