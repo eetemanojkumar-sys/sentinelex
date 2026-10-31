@@ -295,7 +295,7 @@ async function refresh() {
     renderOverview(summaryData||{});
     renderHosts(); renderEvents(); fillHostSelects(); renderProcesses(); renderNetwork(); renderAntivirus(); renderDiskMonitoring();
     const diskSelection=currentDiskSelection(), diskKey=diskSelection.hostId+"|"+diskSelection.mount;
-    if(diskKey!==lastDiskHistoryKey)loadDiskHistory();
+    if(document.getElementById("view-disk").classList.contains("active") || diskKey!==lastDiskHistoryKey)loadDiskHistory();
     $("last-updated").textContent=new Date().toLocaleTimeString();
     setConnection(true,"API connected");
   } catch(error) {
