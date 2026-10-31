@@ -174,3 +174,17 @@ Initial code foundation committed on `cross-platform-v1`:
 The new SQLAlchemy models are additive and are created by the existing `Base.metadata.create_all` when the API starts. This does not migrate or scope existing tables. Do not restart or deploy production merely to activate this development schema. Before production migration, introduce reviewed Alembic migrations and backfill the existing installation into an initial tenant.
 
 **Security status:** not multi-customer launch-ready. Existing API read routes are currently unscoped; the shared agent token remains a prototype. Do not expose public registration or customer data until all tenant authorization and isolation tests pass.
+
+
+### 12. Authentication implementation progress (2026-11-01)
+
+Committed to `cross-platform-v1`:
+
+- `POST /api/v1/auth/register`: creates a user, organization, and Owner membership; starts a browser session.
+- `POST /api/v1/auth/login`: verifies the password hash and starts a browser session.
+- `POST /api/v1/auth/logout`: revokes the current server-side session and clears the cookie.
+- `GET /api/v1/auth/me`: returns the authenticated user and their active organization memberships.
+- Session cookie is HttpOnly, SameSite=Strict, path=/, and Secure by default. Configure `SENTINELX_COOKIE_SECURE=false` only for isolated local HTTP development; production must use HTTPS.
+- Registration currently has no email verification or signup rate limiting. It is a development foundation, not safe for unrestricted public signup.
+
+**Critical unfinished security work:** Existing `/api/v1/hosts`, `/events`, `/summary`, `/disk-history`, and `/metrics/history` routes still read global legacy tables without tenant scoping. Existing telemetry ingestion still uses the prototype global agent token and host IDs are not tenant-bound. Do not treat the new auth routes as proof that the dashboard or data plane is tenant-isolated. Public customer onboarding must remain disabled until migrations, tenant-scoped data access, agent enrollment, CSRF protection, rate limiting, email verification/recovery, and cross-tenant integration tests are implemented.
