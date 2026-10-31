@@ -90,6 +90,7 @@ The installer:
 - Preserves `/etc/sentinelx/sentinelx.env`, existing agent identity, outbox and database contents.
 - Generates first-run agent/admin credentials only on a genuinely fresh installation.
 - Installs pinned Python dependencies and systemd units.
+- Installs and enables the daily PostgreSQL telemetry-retention timer (30-day telemetry / 180-day event defaults, configurable in the environment file).
 - Starts the central API and (unless skipped) the Linux agent, then checks `/health`.
 
 Modes:
