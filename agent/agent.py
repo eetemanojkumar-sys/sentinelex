@@ -17,7 +17,7 @@ HOST_ID = os.getenv("SENTINELX_HOST_ID", socket.gethostname())
 INTERVAL = max(5, int(os.getenv("SENTINELX_INTERVAL", "30")))
 
 if platform.system() == "Windows":
-    DEFAULT_WATCH_PATHS = r"C:\Windows\System32\drivers\etc,C:\ProgramData"
+    DEFAULT_WATCH_PATHS = r"C:\Windows\System32\drivers\etc"
     INSTALL_DIR = Path(os.getenv("SENTINELX_INSTALL_DIR", r"C:\Program Files\SentinelX"))
 else:
     DEFAULT_WATCH_PATHS = "/etc,/opt,/var/www,/home"
