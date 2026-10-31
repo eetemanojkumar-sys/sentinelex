@@ -1,24 +1,29 @@
-"""SentinelX central telemetry API (rule-based; no AI/ML)."""
+"""SentinelX self-hosted central API with local administrator and agent credentials."""
 import hmac
 import os
-from datetime import datetime, timezone
-from typing import Any
+import secrets
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, create_engine, desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
+from server.security import generate_secret, hash_password, hash_secret, verify_password
 
-TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sentinelx.db")
-if not TOKEN:
-    raise RuntimeError("SENTINELX_AGENT_TOKEN must be configured")
-
+ADMIN_USERNAME = os.getenv("SENTINELX_ADMIN_USERNAME", "admin").strip()
+ADMIN_PASSWORD = os.getenv("SENTINELX_ADMIN_PASSWORD", "")
+SESSION_HOURS = max(1, min(int(os.getenv("SENTINELX_SESSION_HOURS", "12")), 168))
+COOKIE_SECURE = os.getenv("SENTINELX_COOKIE_SECURE", "true").lower() == "true"
+ALLOW_LEGACY_TOKEN = os.getenv("SENTINELX_ALLOW_LEGACY_AGENT_TOKEN", "false").lower() == "true"
+LEGACY_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
+SESSION_COOKIE = "sentinelx_session"
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -28,32 +33,60 @@ class Base(DeclarativeBase):
     pass
 
 
+class Admin(Base):
+    __tablename__ = "local_admin"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class AdminSession(Base):
+    __tablename__ = "admin_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EnrollmentToken(Base):
+    __tablename__ = "agent_enrollment_tokens"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class AgentCredential(Base):
+    __tablename__ = "agent_credentials"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Telemetry(Base):
     __tablename__ = "telemetry"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     host_id: Mapped[str] = mapped_column(String(255), index=True)
-    received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
-    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
 class IngestedBatch(Base):
-    """Idempotency ledger: one accepted batch per host and batch identifier."""
     __tablename__ = "ingested_batches"
-    __table_args__ = (
-        UniqueConstraint("host_id", "batch_id", name="uq_ingested_batch_host_batch"),
-    )
+    __table_args__ = (UniqueConstraint("host_id", "batch_id", name="uq_ingested_batch_host_batch"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     host_id: Mapped[str] = mapped_column(String(255), index=True)
     batch_id: Mapped[str] = mapped_column(String(64))
-    received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
-    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
 class Host(Base):
-    """Latest identity and lifecycle metadata for each endpoint."""
     __tablename__ = "hosts"
     host_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     hostname: Mapped[str] = mapped_column(String(255), default="")
@@ -66,7 +99,6 @@ class Host(Base):
 
 
 class LatestMetrics(Base):
-    """One bounded latest snapshot per host for fast fleet queries."""
     __tablename__ = "latest_metrics"
     host_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -81,31 +113,161 @@ class SecurityEvent(Base):
     severity: Mapped[str] = mapped_column(String(20), default="info")
     message: Mapped[str] = mapped_column(String(1000))
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(
-    title="SentinelX Central API",
-    version="0.2.0",
-    description="Independent cross-platform infrastructure health and security telemetry platform",
-)
+if ADMIN_PASSWORD:
+    with SessionLocal() as _db:
+        _admin = _db.scalar(select(Admin).where(Admin.username == ADMIN_USERNAME))
+        if _admin is None:
+            _db.add(Admin(username=ADMIN_USERNAME, password_hash=hash_password(ADMIN_PASSWORD)))
+            _db.commit()
+        elif os.getenv("SENTINELX_RESET_ADMIN_PASSWORD", "false").lower() == "true":
+            _admin.password_hash = hash_password(ADMIN_PASSWORD)
+            _db.commit()
 
+app = FastAPI(title="SentinelX Central API", version="0.3.0",
+              description="Self-hosted cross-platform infrastructure monitoring and security telemetry.")
 DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
 app.mount("/dashboard", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="dashboard")
 
 
+def db_session():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def current_admin(request: Request, db: Session):
+    raw = request.cookies.get(SESSION_COOKIE)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Administrator authentication required")
+    row = db.scalar(select(AdminSession).where(
+        AdminSession.token_hash == hash_secret(raw),
+        AdminSession.revoked_at.is_(None),
+        AdminSession.expires_at > datetime.now(timezone.utc)))
+    if row is None:
+        raise HTTPException(status_code=401, detail="Administrator session expired")
+    return True
+
+
+@app.middleware("http")
+async def protect_dashboard_and_api(request: Request, call_next):
+    path = request.url.path
+    public = (path in {"/health", "/login", "/api/v1/auth/login", "/api/v1/agents/enroll"}
+              or path.startswith("/docs") or path.startswith("/openapi.json")
+              or path.startswith("/redoc"))
+    protected = path.startswith("/dashboard") or (path.startswith("/api/v1/") and path != "/api/v1/telemetry")
+    if protected and not public:
+        raw = request.cookies.get(SESSION_COOKIE)
+        valid = False
+        if raw:
+            with SessionLocal() as db:
+                row = db.scalar(select(AdminSession).where(
+                    AdminSession.token_hash == hash_secret(raw),
+                    AdminSession.revoked_at.is_(None),
+                    AdminSession.expires_at > datetime.now(timezone.utc)))
+                valid = row is not None
+        if not valid:
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "Administrator authentication required"}, status_code=401)
+            return RedirectResponse("/login", status_code=303)
+    return await call_next(request)
+
+
 @app.get("/", include_in_schema=False)
-def dashboard_home():
-    return RedirectResponse(url="/dashboard/")
+def home():
+    return RedirectResponse("/dashboard/")
+
+
+@app.get("/login", include_in_schema=False)
+def login_page():
+    return FileResponse(DASHBOARD_DIR / "login.html")
+
+
+class LoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+@app.post("/api/v1/auth/login")
+def admin_login(payload: LoginIn, response: Response, db: Session = Depends(db_session)):
+    admin = db.scalar(select(Admin).where(Admin.username == payload.username.strip()))
+    if admin is None or not verify_password(payload.password, admin.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid administrator credentials")
+    raw = generate_secret()
+    db.add(AdminSession(id=secrets.token_hex(16), token_hash=hash_secret(raw),
+                        expires_at=datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS)))
+    db.commit()
+    response.set_cookie(SESSION_COOKIE, raw, httponly=True, secure=COOKIE_SECURE,
+                        samesite="strict", max_age=SESSION_HOURS * 3600, path="/")
+    return {"authenticated": True, "username": admin.username}
+
+
+@app.post("/api/v1/auth/logout")
+def admin_logout(request: Request, response: Response, db: Session = Depends(db_session)):
+    raw = request.cookies.get(SESSION_COOKIE)
+    if raw:
+        row = db.scalar(select(AdminSession).where(AdminSession.token_hash == hash_secret(raw)))
+        if row and row.revoked_at is None:
+            row.revoked_at = datetime.now(timezone.utc)
+            db.commit()
+    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True,
+                           secure=COOKIE_SECURE, samesite="strict")
+    return {"authenticated": False}
+
+
+class EnrollmentIn(BaseModel):
+    enrollment_token: str = Field(min_length=20, max_length=256)
+    host_id: str = Field(min_length=1, max_length=255)
+
+
+@app.post("/api/v1/agents/enroll")
+def enroll_agent(payload: EnrollmentIn, db: Session = Depends(db_session)):
+    now = datetime.now(timezone.utc)
+    enrollment = db.scalar(select(EnrollmentToken).where(
+        EnrollmentToken.token_hash == hash_secret(payload.enrollment_token),
+        EnrollmentToken.used_at.is_(None), EnrollmentToken.revoked_at.is_(None),
+        EnrollmentToken.expires_at > now))
+    if enrollment is None:
+        raise HTTPException(status_code=401, detail="Enrollment token is invalid, expired, or already used")
+    credential = generate_secret()
+    enrollment.used_at = now
+    db.add(AgentCredential(id=secrets.token_hex(16), host_id=payload.host_id,
+                           token_hash=hash_secret(credential)))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Enrollment could not be completed")
+    return {"host_id": payload.host_id, "agent_token": credential}
+
+
+def verify_agent(token: str | None, host_id: str, db: Session):
+    if token and ALLOW_LEGACY_TOKEN and LEGACY_TOKEN and hmac.compare_digest(token, LEGACY_TOKEN):
+        return
+    if not token:
+        raise HTTPException(status_code=401, detail="Agent credential required")
+    credential = db.scalar(select(AgentCredential).where(
+        AgentCredential.token_hash == hash_secret(token),
+        AgentCredential.revoked_at.is_(None)))
+    if credential is None or not hmac.compare_digest(credential.host_id, host_id):
+        raise HTTPException(status_code=401, detail="Invalid or revoked agent credential")
+    credential.last_used_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "sentinelx-central", "version": "0.3.0"}
 
 
 class EventIn(BaseModel):
     event_type: str = Field(min_length=1, max_length=100)
-    severity: str = Field(default="info",
-                           pattern="^(info|low|medium|high|critical)$")
+    severity: str = Field(default="info", pattern="^(info|low|medium|high|critical)$")
     message: str = Field(min_length=1, max_length=1000)
     details: dict[str, Any] = Field(default_factory=dict)
 
@@ -127,28 +289,44 @@ class TelemetryIn(BaseModel):
     sequence: int = Field(default=0, ge=0)
 
 
-def db_session():
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+@app.post("/api/v1/admin/agents/enrollment-tokens")
+def create_enrollment_token(request: Request, payload: dict | None = None,
+                            db: Session = Depends(db_session)):
+    current_admin(request, db)
+    minutes = int((payload or {}).get("expires_minutes", 30))
+    if minutes < 5 or minutes > 1440:
+        raise HTTPException(status_code=422, detail="expires_minutes must be between 5 and 1440")
+    raw = generate_secret()
+    db.add(EnrollmentToken(id=secrets.token_hex(16), token_hash=hash_secret(raw),
+                           expires_at=datetime.now(timezone.utc) + timedelta(minutes=minutes)))
+    db.commit()
+    return {"enrollment_token": raw, "expires_in_minutes": minutes}
 
 
-def verify_agent(token: str | None):
-    if not token or not hmac.compare_digest(token, TOKEN):
-        raise HTTPException(status_code=401, detail="Invalid agent token")
+@app.get("/api/v1/admin/agents")
+def list_agents(request: Request, db: Session = Depends(db_session)):
+    current_admin(request, db)
+    rows = db.scalars(select(AgentCredential).order_by(AgentCredential.issued_at.desc())).all()
+    return [{"id": row.id, "host_id": row.host_id, "issued_at": row.issued_at,
+             "last_used_at": row.last_used_at, "revoked": row.revoked_at is not None}
+            for row in rows]
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "service": "sentinelx-central", "version": "0.2.0"}
+@app.post("/api/v1/admin/agents/{credential_id}/revoke")
+def revoke_agent(credential_id: str, request: Request, db: Session = Depends(db_session)):
+    current_admin(request, db)
+    row = db.get(AgentCredential, credential_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Agent credential not found")
+    row.revoked_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"revoked": True, "host_id": row.host_id}
 
 
 @app.post("/api/v1/telemetry", status_code=202)
 def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None),
            db: Session = Depends(db_session)):
-    verify_agent(x_agent_token)
+    verify_agent(x_agent_token, payload.host_id, db)
     now = datetime.now(timezone.utc)
     if payload.batch_id:
         # Flush the unique idempotency record before writing any telemetry.
