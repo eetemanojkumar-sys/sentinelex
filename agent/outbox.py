@@ -2,6 +2,7 @@
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -15,16 +16,23 @@ def _database_path():
     return path
 
 
-def _connect():
+@contextmanager
+def _connection():
     connection = sqlite3.connect(str(_database_path()), timeout=10)
-    connection.execute("""
-        CREATE TABLE IF NOT EXISTS pending_batches (
-            batch_id TEXT PRIMARY KEY,
-            payload_json TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    return connection
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA synchronous=FULL")
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS pending_batches (
+                batch_id TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def enqueue_batch(payload):
@@ -33,7 +41,7 @@ def enqueue_batch(payload):
     if not batch_id:
         raise ValueError("A batch_id is required")
     encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-    with _connect() as connection:
+    with _connection() as connection:
         connection.execute(
             "INSERT OR IGNORE INTO pending_batches (batch_id, payload_json) VALUES (?, ?)",
             (batch_id, encoded),
