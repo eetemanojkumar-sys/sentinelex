@@ -13,13 +13,14 @@ import requests
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from outbox import acknowledge_batch, enqueue_batch, get_pending_batch
+
 CENTRAL_URL = os.getenv("SENTINELX_URL", "http://127.0.0.1:8000").rstrip("/")
 AGENT_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
 HOST_ID = os.getenv("SENTINELX_HOST_ID", socket.gethostname())
 INTERVAL = max(5, int(os.getenv("SENTINELX_INTERVAL", "30")))
 AGENT_VERSION = "0.2.0"
 sequence = 0
-pending_payload = None
 
 if platform.system() == "Windows":
     DEFAULT_WATCH_PATHS = r"C:\Windows\System32\drivers\etc"
@@ -166,41 +167,43 @@ def start_watchers():
 
 
 def send_payload(metrics):
-    """Send one immutable batch until it is acknowledged by the central API."""
-    global sequence, pending_payload
-    if pending_payload is None:
+    """Persist one immutable batch and retry it until the API acknowledges it."""
+    global sequence
+    payload = get_pending_batch()
+    if payload is None:
         sequence += 1
         with event_lock:
             batch = events[:]
-            del events[:]
-        pending_payload = {
-            "schema_version": 1,
-            "host_id": HOST_ID,
-            "batch_id": uuid.uuid4().hex,
-            "agent": {
-                "version": AGENT_VERSION,
-                "platform": platform.system(),
-                "architecture": platform.machine(),
-            },
-            "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "sequence": sequence,
-            "metrics": metrics,
-            "events": batch,
-        }
-    batch_size = len(pending_payload["events"])
+            payload = {
+                "schema_version": 1,
+                "host_id": HOST_ID,
+                "batch_id": __import__("uuid").uuid4().hex,
+                "agent": {
+                    "version": AGENT_VERSION,
+                    "platform": platform.system(),
+                    "architecture": platform.machine(),
+                },
+                "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "sequence": sequence,
+                "metrics": metrics,
+                "events": batch,
+            }
+            # Only remove events after the exact payload is safely on disk.
+            enqueue_batch(payload)
+            del events[:len(batch)]
+    batch_size = len(payload["events"])
     try:
         response = requests.post(
             f"{CENTRAL_URL}/api/v1/telemetry",
-            json=pending_payload,
+            json=payload,
             headers={"X-Agent-Token": AGENT_TOKEN},
             timeout=10,
         )
         response.raise_for_status()
+        acknowledge_batch(payload["batch_id"])
         print(f"Telemetry acknowledged; events={batch_size}", flush=True)
-        pending_payload = None
     except requests.RequestException as exc:
-        # Retain the exact payload and batch ID. If the server committed it but
-        # the response was lost, retrying is safe because ingestion is idempotent.
+        # The SQLite outbox preserves this exact payload across retries/restarts.
         print(f"Telemetry delivery pending acknowledgement: {exc}", flush=True)
 
 
