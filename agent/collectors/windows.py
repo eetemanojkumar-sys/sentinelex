@@ -68,34 +68,62 @@ def windows_services(limit=250):
 
 
 def collect_security_events(limit=25):
-    """Read recent successful/failed logons from the Windows Security log."""
+    """Read recent successful and failed Windows logons."""
     safe_limit = max(1, min(int(limit), 100))
-    script = (
-        "$ErrorActionPreference = 'Stop'; "
-        "$items = Get-WinEvent -FilterHashtable @{LogName='Security'; "
-        "Id=4624,4625; StartTime=(Get-Date).AddMinutes(-5)} "
-        "-MaxEvents " + str(safe_limit) + "; "
-        "$items | ForEach-Object { "
-        "[PSCustomObject]@{ "
-        "record_id=$_.RecordId; event_id=$_.Id; "
-        "time_created=$_.TimeCreated.ToUniversalTime().ToString('o'); "
-        "message=$_.Message "
-        "} } | ConvertTo-Json -Compress -Depth 3"
+    script = r"""
+$ErrorActionPreference = 'Stop'
+try {
+    $events = @(
+        Get-WinEvent -FilterHashtable @{
+            LogName = 'Security'
+            Id = 4624,4625
+            StartTime = (Get-Date).AddMinutes(-5)
+        } -MaxEvents LIMIT_PLACEHOLDER -ErrorAction Stop
     )
+    $output = @(
+        foreach ($event in $events) {
+            [PSCustomObject]@{
+                record_id = $event.RecordId
+                event_id = $event.Id
+                time_created = $event.TimeCreated.ToUniversalTime().ToString('o')
+                message = $event.Message
+            }
+        }
+    )
+    ConvertTo-Json -InputObject $output -Compress -Depth 3
+}
+catch {
+    if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') {
+        '[]'
+    }
+    else {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        exit 1
+    }
+}
+""".replace("LIMIT_PLACEHOLDER", str(safe_limit))
+
     try:
         result = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True, text=True, timeout=12, check=False,
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
         )
         if result.returncode != 0:
-            return {"available": False,
-                    "reason": (result.stderr or "Security event log access unavailable")[:500],
-                    "items": []}
-        if not result.stdout.strip():
-            return {"available": True, "reason": None, "items": []}
-        data = json.loads(result.stdout)
-        return {"available": True, "reason": None,
-                "items": data if isinstance(data, list) else [data]}
+            return {
+                "available": False,
+                "reason": (result.stderr or "Security event log access unavailable")[:500],
+                "items": [],
+            }
+
+        output = result.stdout.strip()
+        data = json.loads(output) if output else []
+        if isinstance(data, dict):
+            data = [data]
+        return {"available": True, "reason": None, "items": data}
+
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         return {"available": False, "reason": str(exc)[:500], "items": []}
 
