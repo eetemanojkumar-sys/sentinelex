@@ -1,8 +1,10 @@
 # SentinelX
 
-SentinelX is a **rule-based Linux system health and security monitoring project** written in Python.
+SentinelX is an independent, rule-based infrastructure health and security monitoring platform. It is being expanded from its initial Linux monitoring implementation into a centralized, cross-platform fleet product.
 
-Initial target: **one Ubuntu EC2 instance**. The first version runs directly on Linux using Python virtual environments and systemd. It does not use Docker, AI, machine learning, Kubernetes, or predictive analytics.
+**Product direction:** SentinelX owns endpoint collection, telemetry transport, storage, alert processing, and its web dashboard. Prometheus, Node Exporter, Windows Exporter, and Grafana are not runtime dependencies. Endpoints push telemetry to the SentinelX central API; they do not expose exporter scrape ports.
+
+The current development work is on `cross-platform-v1`. The running production deployment and `main` branch remain separate until release checks and explicit deployment approval. No Docker, Kubernetes, AI, or machine learning.
 
 ## Initial features
 
@@ -16,6 +18,10 @@ Initial target: **one Ubuntu EC2 instance**. The first version runs directly on 
 - Basic ClamAV executable and daemon status checks
 - Central FastAPI ingestion API and PostgreSQL persistence
 - Shared-token authentication for the initial single-host deployment
+
+## Independent monitoring architecture
+
+The target architecture, telemetry contract, data model, scale strategy, dashboard modules, security boundaries, and implementation phases are documented in [Independent Monitoring Architecture](docs/INDEPENDENT_MONITORING_ARCHITECTURE.md).
 
 ## Architecture
 
