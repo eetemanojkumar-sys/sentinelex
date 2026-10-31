@@ -10,9 +10,19 @@ let selectedServiceHost = "";
 let hostOffset = 0;
 let hostTotal = 0;
 let hostSearch = "";
-const HOST_PAGE_SIZE = 100;\nlet hostOffset = 0;\nlet hostTotal = 0;\nlet hostSearch = "";\nconst HOST_PAGE_SIZE = 100;
+const HOST_PAGE_SIZE = 100;
 
 const $ = (id) => document.getElementById(id);
+function adminHeaders() {
+  let token = sessionStorage.getItem("sentinelx_admin_token") || "";
+  if (!token) {
+    token = window.prompt("Enter SentinelX administrator token:");
+    if (!token) throw new Error("Administrator authentication is required");
+    sessionStorage.setItem("sentinelx_admin_token", token.trim());
+    token = token.trim();
+  }
+  return {"Accept":"application/json", "Authorization":"Bearer " + token};
+}
 const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const num = (value, digits = 1) => Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
 const bytes = (value) => {
@@ -39,14 +49,14 @@ const severity = (value) => {
 const isOnline = (lastSeen) => lastSeen && (Date.now() - new Date(lastSeen).getTime() < 90000);
 
 async function getJson(path) {
-  const response = await fetch(API + path, {headers: {"Accept":"application/json"}, cache:"no-store"});
+  const response = await fetch(API + path, {headers: adminHeaders(), cache:"no-store"});
   if (!response.ok) throw new Error(path + " returned HTTP " + response.status);
   return response.json();
 }
 async function loadHostPage() {
   const params = new URLSearchParams({limit:String(HOST_PAGE_SIZE),offset:String(hostOffset)});
   if (hostSearch) params.set("search",hostSearch);
-  const response = await fetch(API + "/api/v1/hosts?" + params.toString(), {headers:{"Accept":"application/json"},cache:"no-store"});
+  const response = await fetch(API + "/api/v1/hosts?" + params.toString(), {headers:adminHeaders(),cache:"no-store"});
   if (!response.ok) throw new Error("Host inventory returned HTTP " + response.status);
   hostTotal = Number(response.headers.get("X-Total-Count") || 0);
   hosts = await response.json();
@@ -362,9 +372,6 @@ async function refresh() {
 }
 document.querySelectorAll("[data-view]").forEach(link=>link.addEventListener("click",e=>{e.preventDefault();const name=link.dataset.view;switchView(name);window.history.replaceState(null,"","#"+name);}));
 $("refresh-btn").addEventListener("click",refresh);
-$("host-prev").addEventListener("click",()=>{hostOffset=Math.max(0,hostOffset-HOST_PAGE_SIZE);refresh();});
-$("host-next").addEventListener("click",()=>{hostOffset=Math.min(Math.max(0,hostTotal-HOST_PAGE_SIZE),hostOffset+HOST_PAGE_SIZE);refresh();});
-$("host-search").addEventListener("input",()=>{hostSearch=$("host-search").value.trim();hostOffset=0;refresh();});
 $("host-prev").addEventListener("click",()=>{hostOffset=Math.max(0,hostOffset-HOST_PAGE_SIZE);refresh();});
 $("host-next").addEventListener("click",()=>{hostOffset=Math.min(Math.max(0,hostTotal-HOST_PAGE_SIZE),hostOffset+HOST_PAGE_SIZE);refresh();});
 $("host-search").addEventListener("input",()=>{hostSearch=$("host-search").value.trim();hostOffset=0;refresh();});
