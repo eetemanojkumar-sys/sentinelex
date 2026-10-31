@@ -6,7 +6,11 @@ let events = [];
 let selectedHost = "";
 let diskHistory = [];
 let lastDiskHistoryKey = "";
-let selectedServiceHost = "";\nlet hostOffset = 0;\nlet hostTotal = 0;\nlet hostSearch = "";\nconst HOST_PAGE_SIZE = 100;
+let selectedServiceHost = "";
+let hostOffset = 0;
+let hostTotal = 0;
+let hostSearch = "";
+const HOST_PAGE_SIZE = 100;\nlet hostOffset = 0;\nlet hostTotal = 0;\nlet hostSearch = "";\nconst HOST_PAGE_SIZE = 100;
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -38,6 +42,19 @@ async function getJson(path) {
   const response = await fetch(API + path, {headers: {"Accept":"application/json"}, cache:"no-store"});
   if (!response.ok) throw new Error(path + " returned HTTP " + response.status);
   return response.json();
+}
+async function loadHostPage() {
+  const params = new URLSearchParams({limit:String(HOST_PAGE_SIZE),offset:String(hostOffset)});
+  if (hostSearch) params.set("search",hostSearch);
+  const response = await fetch(API + "/api/v1/hosts?" + params.toString(), {headers:{"Accept":"application/json"},cache:"no-store"});
+  if (!response.ok) throw new Error("Host inventory returned HTTP " + response.status);
+  hostTotal = Number(response.headers.get("X-Total-Count") || 0);
+  hosts = await response.json();
+  const first = hostTotal ? hostOffset + 1 : 0;
+  const last = Math.min(hostOffset + hosts.length,hostTotal);
+  if ($("host-page-label")) $("host-page-label").textContent = first + "–" + last + " of " + hostTotal + " servers";
+  if ($("host-prev")) $("host-prev").disabled = hostOffset <= 0;
+  if ($("host-next")) $("host-next").disabled = hostOffset + HOST_PAGE_SIZE >= hostTotal;
 }
 function setConnection(ok, message) {
   $("connection-dot").parentElement.classList.toggle("offline", !ok);
@@ -329,8 +346,8 @@ function switchView(name) {
 }
 async function refresh() {
   try {
-    const [summaryData,hostData,eventData]=await Promise.all([getJson("/api/v1/summary"),getJson("/api/v1/hosts"),getJson("/api/v1/events?limit=100")]);
-    hosts=Array.isArray(hostData)?hostData:[];
+    const [summaryData,eventData]=await Promise.all([getJson("/api/v1/summary"),getJson("/api/v1/events?limit=100")]);
+    await loadHostPage();
     events=Array.isArray(eventData)?eventData:[];
     renderOverview(summaryData||{});
     renderHosts(); renderEvents(); fillHostSelects(); renderProcesses(); renderNetwork(); renderAntivirus(); renderServices(); renderDiskMonitoring();
@@ -345,6 +362,9 @@ async function refresh() {
 }
 document.querySelectorAll("[data-view]").forEach(link=>link.addEventListener("click",e=>{e.preventDefault();const name=link.dataset.view;switchView(name);window.history.replaceState(null,"","#"+name);}));
 $("refresh-btn").addEventListener("click",refresh);
+$("host-prev").addEventListener("click",()=>{hostOffset=Math.max(0,hostOffset-HOST_PAGE_SIZE);refresh();});
+$("host-next").addEventListener("click",()=>{hostOffset=Math.min(Math.max(0,hostTotal-HOST_PAGE_SIZE),hostOffset+HOST_PAGE_SIZE);refresh();});
+$("host-search").addEventListener("input",()=>{hostSearch=$("host-search").value.trim();hostOffset=0;refresh();});
 $("host-prev").addEventListener("click",()=>{hostOffset=Math.max(0,hostOffset-HOST_PAGE_SIZE);refresh();});
 $("host-next").addEventListener("click",()=>{hostOffset=Math.min(Math.max(0,hostTotal-HOST_PAGE_SIZE),hostOffset+HOST_PAGE_SIZE);refresh();});
 $("host-search").addEventListener("input",()=>{hostSearch=$("host-search").value.trim();hostOffset=0;refresh();});
