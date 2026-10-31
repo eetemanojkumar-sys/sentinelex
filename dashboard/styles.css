@@ -26,3 +26,6 @@
 .disk-row-meter{width:100px;height:6px}
 @media(max-width:1050px){.disk-toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}.disk-metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.disk-toolbar{grid-template-columns:1fr 1fr}.disk-content-grid{grid-template-columns:1fr}.disk-row-meter{width:65px}}
+
+/* Cross-platform host and Windows service inventory */
+.service-running{color:var(--green);font-weight:700}.service-stopped{color:var(--amber);font-weight:700}.host-platform{overflow-wrap:anywhere}.av-item span:last-child{overflow-wrap:anywhere;text-align:right}
