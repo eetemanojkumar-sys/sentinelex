@@ -35,7 +35,7 @@ GitHub Actions is configured to run collector tests on Ubuntu and Windows runner
 
 ## Current limitations
 
-- Windows Event Log authentication collection is not implemented yet.
+- Windows Security Event Log collection now reads recent successful logons (4624) and failed logons (4625), deduplicates records during the agent process lifetime, and reports unavailable access explicitly.
 - Windows service installation and the one-click PowerShell installer are not implemented yet.
 - Secure per-host enrollment is not implemented yet; the prototype still uses a shared token.
 - Dashboard views for network interfaces and services are not implemented yet.
