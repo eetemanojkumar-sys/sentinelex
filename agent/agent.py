@@ -5,8 +5,9 @@ import platform
 import socket
 import tempfile
 import time
+import json
 import uuid
-import uuid
+import stat
 from pathlib import Path
 from threading import Lock
 
@@ -17,10 +18,12 @@ from watchdog.observers import Observer
 from outbox import acknowledge_batch, enqueue_batch, get_pending_batch
 
 CENTRAL_URL = os.getenv("SENTINELX_URL", "http://127.0.0.1:8000").rstrip("/")
-AGENT_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
-HOST_ID = os.getenv("SENTINELX_HOST_ID", socket.gethostname())
+BOOTSTRAP_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
+AGENT_TOKEN = BOOTSTRAP_TOKEN
+HOST_ID = os.getenv("SENTINELX_HOST_ID", "")
+STATE_FILE = Path(os.getenv("SENTINELX_STATE_FILE", str(Path(os.getenv("PROGRAMDATA", "/var/lib")) / "SentinelX" / "agent.json")))
 INTERVAL = max(5, int(os.getenv("SENTINELX_INTERVAL", "30")))
-AGENT_VERSION = "0.2.0"
+AGENT_VERSION = "0.3.0"
 sequence = 0
 
 if platform.system() == "Windows":
@@ -72,6 +75,61 @@ def acquire_single_instance_lock():
         return False
     _agent_lock_handle = handle
     return True
+
+
+def initialize_identity():
+    """Load a persisted per-agent credential or enroll this endpoint once."""
+    global AGENT_TOKEN, HOST_ID
+
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if STATE_FILE.exists():
+        try:
+            state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            if state.get("agent_token") and state.get("host_id") and state.get("agent_id"):
+                AGENT_TOKEN = state["agent_token"]
+                HOST_ID = state["host_id"]
+                return
+        except (OSError, ValueError, TypeError):
+            print("Saved SentinelX identity could not be read; enrolling again.", flush=True)
+
+    if not BOOTSTRAP_TOKEN:
+        raise SystemExit("SENTINELX_AGENT_TOKEN bootstrap token is required for first enrollment")
+
+    machine_id = str(uuid.uuid4())
+    payload = {
+        "hostname": socket.gethostname(),
+        "os_name": platform.system(),
+        "machine_id": machine_id,
+    }
+    response = requests.post(
+        f"{CENTRAL_URL}/api/v1/agents/enroll",
+        json=payload,
+        headers={"X-Agent-Token": BOOTSTRAP_TOKEN},
+        timeout=15,
+    )
+    response.raise_for_status()
+    registration = response.json()
+    required = ("agent_id", "host_id", "agent_token")
+    if not all(registration.get(key) for key in required):
+        raise RuntimeError("Central API returned an incomplete enrollment response")
+
+    state = {
+        "agent_id": registration["agent_id"],
+        "host_id": registration["host_id"],
+        "agent_token": registration["agent_token"],
+        "machine_id": machine_id,
+    }
+    temporary = STATE_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state), encoding="utf-8")
+    try:
+        os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+    temporary.replace(STATE_FILE)
+    AGENT_TOKEN = state["agent_token"]
+    HOST_ID = state["host_id"]
+    print(f"Enrolled with SentinelX central; host_id={HOST_ID}", flush=True)
+
 
 
 def queue_event(event_type, severity, message, details=None):
@@ -209,8 +267,7 @@ def send_payload(metrics):
 
 
 def main():
-    if not AGENT_TOKEN:
-        raise SystemExit("SENTINELX_AGENT_TOKEN is required")
+    initialize_identity()
     if not acquire_single_instance_lock():
         print(f"Another SentinelX agent is already running for host {HOST_ID}; exiting.", flush=True)
         raise SystemExit(0)
