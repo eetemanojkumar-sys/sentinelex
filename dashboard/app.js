@@ -4,6 +4,8 @@ const resourceHistory = [];
 let hosts = [];
 let events = [];
 let selectedHost = "";
+let diskHistory = [];
+let lastDiskHistoryKey = "";
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -105,6 +107,141 @@ function formatUptime(value) {
   const d=Math.floor(s/86400), h=Math.floor((s%86400)/3600), m=Math.floor((s%3600)/60);
   return (d?d+"d ":"") + h+"h "+m+"m";
 }
+
+function diskStatus(percent) {
+  const value = Number(percent);
+  if (!Number.isFinite(value)) return {label:"Unknown", cls:"healthy"};
+  if (value >= 90) return {label:"Critical", cls:"critical"};
+  if (value >= 80) return {label:"Warning", cls:"warning"};
+  return {label:"Healthy", cls:"healthy"};
+}
+function currentDiskSelection() {
+  const hostId = $("disk-host")?.value || "";
+  const host = hosts.find(item => item.host_id === hostId);
+  const disk = host?.metrics?.disk || {};
+  const mount = $("disk-mount")?.value || Object.keys(disk)[0] || "";
+  return {hostId, host, disk, mount, volume:disk[mount]};
+}
+function fillDiskSelectors() {
+  const hostSelect = $("disk-host"), previousHost = hostSelect.value;
+  hostSelect.innerHTML = hosts.map(h => '<option value="' + esc(h.host_id) + '">' + esc(h.host_id) + '</option>').join("");
+  if (hosts.some(h => h.host_id === previousHost)) hostSelect.value = previousHost;
+  const selectedHostId = hostSelect.value;
+  const host = hosts.find(h => h.host_id === selectedHostId);
+  const disk = host?.metrics?.disk || {};
+  const mounts = Object.keys(disk).sort();
+  const mountSelect = $("disk-mount"), previousMount = mountSelect.value;
+  mountSelect.innerHTML = mounts.map(m => '<option value="' + esc(m) + '">' + esc(m) + '</option>').join("");
+  if (mounts.includes(previousMount)) mountSelect.value = previousMount;
+  return {hostId:selectedHostId, mount:mountSelect.value, host, disk};
+}
+function renderDiskMonitoring() {
+  const selection = fillDiskSelectors();
+  const {hostId, mount, host, disk} = selection;
+  const volume = disk[mount];
+  const entries = Object.entries(disk);
+  $("disk-volume-count").textContent = entries.length;
+  const status = diskStatus(volume?.percent);
+  $("disk-health-badge").textContent = volume ? status.label : "No data";
+  $("disk-health-badge").className = "disk-health " + status.cls;
+  if (!volume) {
+    ["disk-total","disk-used","disk-free","disk-percent","disk-breakdown-used","disk-breakdown-free","disk-last-report"].forEach(id => $(id).textContent = "—");
+    $("disk-volume-label").textContent = "No filesystem data for this host";
+    $("disk-meter").style.width = "0%";
+    $("disk-health-meter").style.width = "0%";
+    $("disk-table").innerHTML = '<tr><td colspan="6" class="empty">No disk telemetry is available. Check that the SentinelX agent is running and reporting.</td></tr>';
+    $("disk-table-count").textContent = "0 volumes";
+    $("disk-history-caption").textContent = "No selected filesystem";
+    drawDiskHistoryChart();
+    return;
+  }
+  const percent = Number(volume.percent);
+  const safePercent = Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0));
+  $("disk-total").textContent = bytes(volume.total_bytes);
+  $("disk-used").textContent = bytes(volume.used_bytes);
+  $("disk-free").textContent = bytes(volume.free_bytes);
+  $("disk-percent").textContent = num(percent) + "% used · " + status.label;
+  $("disk-volume-label").textContent = hostId + " · " + mount;
+  $("disk-breakdown-used").textContent = bytes(volume.used_bytes);
+  $("disk-breakdown-free").textContent = bytes(volume.free_bytes);
+  $("disk-last-report").textContent = timeAgo(host?.last_seen);
+  $("disk-meter").style.width = safePercent + "%";
+  $("disk-health-meter").style.width = safePercent + "%";
+  const query = ($("disk-search").value || "").toLowerCase();
+  const sort = $("disk-sort").value;
+  let rows = entries.filter(([path]) => path.toLowerCase().includes(query));
+  if (sort === "usage-desc") rows.sort((a,b)=>(Number(b[1].percent)||0)-(Number(a[1].percent)||0));
+  else if (sort === "usage-asc") rows.sort((a,b)=>(Number(a[1].percent)||0)-(Number(b[1].percent)||0));
+  else rows.sort((a,b)=>a[0].localeCompare(b[0]));
+  $("disk-table-count").textContent = rows.length + " volumes";
+  $("disk-table").innerHTML = rows.map(([path,data]) => {
+    const state = diskStatus(data.percent);
+    const value = Math.max(0,Math.min(100,Number(data.percent)||0));
+    const active = path === mount ? " selected-volume" : "";
+    return '<tr class="disk-row' + active + '" data-mount="' + esc(path) + '" tabindex="0" role="button" aria-label="Inspect ' + esc(path) + '"><td><strong>' + esc(path) + '</strong></td><td>' + esc(bytes(data.used_bytes)) + ' / ' + esc(bytes(data.total_bytes)) + '</td><td>' + esc(bytes(data.free_bytes)) + '</td><td>' + num(data.percent) + '%</td><td><span class="disk-health ' + state.cls + '">' + state.label + '</span></td><td><div class="disk-row-meter"><i style="width:' + value + '%"></i></div></td></tr>';
+  }).join("") || '<tr><td colspan="6" class="empty">No mount points match your search.</td></tr>';
+}
+async function loadDiskHistory() {
+  const {hostId, mount} = currentDiskSelection();
+  const key = hostId + "|" + mount;
+  lastDiskHistoryKey = key;
+  if (!hostId || !mount) {
+    diskHistory = [];
+    drawDiskHistoryChart();
+    return;
+  }
+  $("disk-history-caption").textContent = "Loading recent stored samples…";
+  try {
+    const result = await getJson("/api/v1/disk-history?host_id=" + encodeURIComponent(hostId) + "&mountpoint=" + encodeURIComponent(mount) + "&limit=120");
+    if (lastDiskHistoryKey !== key) return;
+    diskHistory = Array.isArray(result.samples) ? result.samples : [];
+    $("disk-history-caption").textContent = diskHistory.length + " stored samples · " + hostId + " · " + mount;
+    drawDiskHistoryChart();
+  } catch (error) {
+    $("disk-history-caption").textContent = "Could not load disk history: " + error.message;
+    diskHistory = [];
+    drawDiskHistoryChart();
+  }
+}
+function drawDiskHistoryChart() {
+  const canvas = $("disk-history-chart");
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(300, rect.width * dpr);
+  canvas.height = 220 * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const w = canvas.width/dpr, h = 220, pad = {l:34,r:12,t:14,b:27};
+  const cw = w-pad.l-pad.r, ch = h-pad.t-pad.b;
+  ctx.clearRect(0,0,w,h);
+  ctx.font = "10px system-ui";
+  for (let v=0;v<=100;v+=20) {
+    const y=pad.t+ch*(1-v/100);
+    ctx.strokeStyle="#26374d";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();
+    ctx.fillStyle="#7890ad";ctx.fillText(v+"%",2,y+3);
+  }
+  [[80,"#f5b95c"],[90,"#ff737d"]].forEach(([v,color])=>{
+    const y=pad.t+ch*(1-v/100);
+    ctx.setLineDash([5,4]);ctx.strokeStyle=color;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();ctx.setLineDash([]);
+  });
+  if (!diskHistory.length) {
+    ctx.fillStyle="#8fa2bc";ctx.textAlign="center";
+    ctx.fillText("Historical samples will appear as telemetry is collected",w/2,h/2);
+    return;
+  }
+  ctx.beginPath();
+  diskHistory.forEach((sample,i)=>{
+    const x=pad.l+(diskHistory.length===1?cw:cw*i/(diskHistory.length-1));
+    const y=pad.t+ch*(1-Math.max(0,Math.min(100,Number(sample.percent)||0))/100);
+    if (!i) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.strokeStyle="#39d4c5";ctx.lineWidth=2.5;ctx.lineJoin="round";ctx.stroke();
+  const last=diskHistory[diskHistory.length-1], lastY=pad.t+ch*(1-Math.max(0,Math.min(100,Number(last.percent)||0))/100);
+  ctx.fillStyle="#39d4c5";ctx.beginPath();ctx.arc(w-pad.r,lastY,3.5,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle="#8fa2bc";ctx.textAlign="left";ctx.fillText("Oldest",pad.l,h-6);
+  ctx.textAlign="right";ctx.fillText("Latest",w-pad.r,h-6);
+}
+
 function renderEvents() {
   const query=($("event-search")?.value||"").toLowerCase();
   const filter=$("severity-filter")?.value||"all";
@@ -146,9 +283,9 @@ function renderAntivirus() {
 function switchView(name) {
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+name));
   document.querySelectorAll(".nav-link").forEach(v=>v.classList.toggle("active",v.dataset.view===name));
-  const titles={overview:"System overview",hosts:"Monitored hosts",events:"Security events",processes:"Running processes",network:"Network ports",antivirus:"Antivirus status"};
+  const titles={overview:"System overview",hosts:"Monitored hosts",disk:"Disk monitoring",events:"Security events",processes:"Running processes",network:"Network ports",antivirus:"Antivirus status"};
   $("page-title").textContent=titles[name]||"System overview";
-  if(name==="processes")renderProcesses(); if(name==="network")renderNetwork();
+  if(name==="processes")renderProcesses(); if(name==="network")renderNetwork(); if(name==="disk"){renderDiskMonitoring();loadDiskHistory();}
 }
 async function refresh() {
   try {
@@ -156,7 +293,9 @@ async function refresh() {
     hosts=Array.isArray(hostData)?hostData:[];
     events=Array.isArray(eventData)?eventData:[];
     renderOverview(summaryData||{});
-    renderHosts(); renderEvents(); fillHostSelects(); renderProcesses(); renderNetwork(); renderAntivirus();
+    renderHosts(); renderEvents(); fillHostSelects(); renderProcesses(); renderNetwork(); renderAntivirus(); renderDiskMonitoring();
+    const diskSelection=currentDiskSelection(), diskKey=diskSelection.hostId+"|"+diskSelection.mount;
+    if(diskKey!==lastDiskHistoryKey)loadDiskHistory();
     $("last-updated").textContent=new Date().toLocaleTimeString();
     setConnection(true,"API connected");
   } catch(error) {
@@ -170,6 +309,12 @@ $("event-search").addEventListener("input",renderEvents);
 $("severity-filter").addEventListener("change",renderEvents);
 $("process-host").addEventListener("change",renderProcesses);
 $("network-host").addEventListener("change",renderNetwork);
-window.addEventListener("resize",drawChart);
+$("disk-host").addEventListener("change",()=>{renderDiskMonitoring();loadDiskHistory();});
+$("disk-mount").addEventListener("change",()=>{renderDiskMonitoring();loadDiskHistory();});
+$("disk-search").addEventListener("input",renderDiskMonitoring);
+$("disk-sort").addEventListener("change",renderDiskMonitoring);
+$("disk-table").addEventListener("click",event=>{const row=event.target.closest("[data-mount]");if(!row)return;$("disk-mount").value=row.dataset.mount;renderDiskMonitoring();loadDiskHistory();});
+$("disk-table").addEventListener("keydown",event=>{if(event.key!=="Enter"&&event.key!==" ")return;const row=event.target.closest("[data-mount]");if(!row)return;event.preventDefault();$("disk-mount").value=row.dataset.mount;renderDiskMonitoring();loadDiskHistory();});
+window.addEventListener("resize",()=>{drawChart();drawDiskHistoryChart();});
 refresh();
 setInterval(refresh,REFRESH_MS);
