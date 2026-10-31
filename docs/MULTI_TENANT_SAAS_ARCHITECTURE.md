@@ -188,3 +188,16 @@ Committed to `cross-platform-v1`:
 - Registration currently has no email verification or signup rate limiting. It is a development foundation, not safe for unrestricted public signup.
 
 **Critical unfinished security work:** Existing `/api/v1/hosts`, `/events`, `/summary`, `/disk-history`, and `/metrics/history` routes still read global legacy tables without tenant scoping. Existing telemetry ingestion still uses the prototype global agent token and host IDs are not tenant-bound. Do not treat the new auth routes as proof that the dashboard or data plane is tenant-isolated. Public customer onboarding must remain disabled until migrations, tenant-scoped data access, agent enrollment, CSRF protection, rate limiting, email verification/recovery, and cross-tenant integration tests are implemented.
+
+
+### 13. Customer entry point and fail-closed data APIs (2026-11-01)
+
+Further development-branch changes:
+
+- `auth_ui/index.html` and `auth_ui/auth.js`: customer sign-in and organization registration interface. The browser uses same-origin requests and the HttpOnly session cookie; it does not store credentials or session tokens in local storage.
+- `server/main.py`: the root page now directs users to `/login`; the login page is served from `/auth-ui/`.
+- Legacy global customer data routes (`/api/v1/hosts`, `/events`, `/summary`, `/disk-history`, and `/metrics/history`) now fail closed with HTTP 503 while tenant migrations and resource ownership checks are incomplete. This deliberately prevents customer accounts from reading the old shared/global dataset.
+- `server/test_auth.py`: API tests for registration, session lookup, logout/revocation, invalid login, and fail-closed data routes.
+- `requirements.txt`: HTTPX pinned for FastAPI TestClient support; CI invokes the new auth tests.
+
+**Still not launch-ready:** email verification/recovery, signup/login throttling, CSRF protection, tenant_id migrations and backfill, tenant-scoped metrics/hosts/events, per-host enrollment and credential verification, role enforcement, audit coverage, and two-tenant isolation tests remain outstanding. The dashboard monitoring views are intentionally not connected to customer data until those controls exist. Do not enable public signup or deploy this branch to production yet.
