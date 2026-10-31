@@ -10,9 +10,12 @@ os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(_DB.name) / "auth-test.db")
 os.environ["SENTINELX_COOKIE_SECURE"] = "false"
 
 from fastapi.testclient import TestClient
-from server.main import app
+from server import main
 
-client = TestClient(app)
+# The ingestion test module may import the app first with production defaults.
+# Force insecure cookies only inside this isolated HTTP test process.
+main.COOKIE_SECURE = False
+client = TestClient(main.app)
 
 
 class AuthApiTests(unittest.TestCase):
