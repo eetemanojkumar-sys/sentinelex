@@ -11,6 +11,8 @@ let selectedServiceHost = "";
 let hostOffset = 0;
 let hostTotal = 0;
 let hostSearch = "";
+let activeServerSegment = "overview";
+let serverHistory = [];
 const HOST_PAGE_SIZE = 100;
 
 const $ = (id) => document.getElementById(id);
@@ -302,6 +304,102 @@ function drawDiskHistoryChart() {
   ctx.textAlign="right";ctx.fillText("Latest",w-pad.r,h-6);
 }
 
+
+function serverSelected() {
+  const id=$("server-detail-host")?.value || "";
+  return hosts.find(h=>h.host_id===id) || hosts[0] || null;
+}
+function serverGauge(label,value,sub) {
+  const n=Math.max(0,Math.min(100,Number(value)||0));
+  const color=n>=90?"#ff737d":n>=75?"#f5b95c":"#39d4c5";
+  return '<div class="server-gauge-card"><div class="server-gauge" style="--gauge:'+n+'%;--gauge-color:'+color+'"><div><strong>'+num(value)+'%</strong><small>'+esc(label)+'</small></div></div><span>'+esc(sub||"Latest sample")+'</span></div>';
+}
+function serverProgress(label,value,detail,kind="") {
+  const n=Math.max(0,Math.min(100,Number(value)||0));
+  return '<div class="server-progress-row"><div><span>'+esc(label)+'</span><strong>'+esc(detail||num(value)+'%')+'</strong></div><div class="server-progress '+kind+'"><i style="width:'+n+'%"></i></div></div>';
+}
+function serverPanel(title,subtitle,body) {
+  return '<article class="panel server-panel"><div class="panel-head"><div><h3>'+title+'</h3><p>'+subtitle+'</p></div></div>'+body+'</article>';
+}
+function renderServerExplorer() {
+  const select=$("server-detail-host");
+  if(!select)return;
+  const previous=select.value;
+  select.innerHTML=hosts.map(h=>'<option value="'+esc(h.host_id)+'">'+esc(h.host_id)+'</option>').join("");
+  if(hosts.some(h=>h.host_id===previous))select.value=previous;
+  const host=serverSelected(), root=$("server-detail-content");
+  if(!host){$("server-identity").textContent="No reporting servers";$("server-last-seen").textContent="—";root.innerHTML='<div class="panel empty">No server telemetry available yet.</div>';return;}
+  const m=host.metrics||{}, mem=m.memory||{}, disks=Object.entries(m.disk||{}), online=isOnline(host.last_seen);
+  const platform=m.os?.system||m.platform||"Operating system not reported";
+  $("server-identity").innerHTML='<strong>'+esc(host.host_id)+'</strong><span>'+esc(platform)+' · '+esc(m.os?.release||"")+'</span><span class="status '+(online?"online":"stale")+'">'+(online?"Online":"Stale")+'</span>';
+  $("server-last-seen").textContent="Last heartbeat "+timeAgo(host.last_seen);
+  const cpu=Number(m.cpu_percent), memory=Number(mem.percent);
+  const processes=Array.isArray(m.processes)?m.processes:[];
+  const services=Array.isArray(m.services?.items)?m.services.items:[];
+  const ports=Array.isArray(m.listening_ports)?m.listening_ports:[];
+  const hostEvents=events.filter(e=>e.host_id===host.host_id);
+  const av=m.antivirus||{}, defender=av.microsoft_defender;
+  let body="";
+  if(activeServerSegment==="overview"){
+    const criticalDisks=disks.filter(([,d])=>Number(d.percent)>=90).length;
+    const warnings=disks.filter(([,d])=>Number(d.percent)>=80&&Number(d.percent)<90).length;
+    body='<div class="server-gauge-grid">'+serverGauge("CPU",cpu,"Processor utilization")+serverGauge("Memory",memory,bytes(mem.available_bytes)+" available")+'<div class="server-kpi"><span>Processes</span><strong>'+processes.length+'</strong><small>In latest snapshot</small></div><div class="server-kpi"><span>Listening ports</span><strong>'+ports.length+'</strong><small>Reported sockets</small></div><div class="server-kpi"><span>Storage alerts</span><strong>'+criticalDisks+' critical / '+warnings+' warning</strong><small>'+disks.length+' volumes monitored</small></div><div class="server-kpi"><span>Security events</span><strong>'+hostEvents.length+'</strong><small>In recent event feed</small></div></div>'+
+      serverPanel("Resource profile","Latest CPU and memory readings",serverGauge("CPU",cpu)+serverGauge("Memory",memory))+
+      serverPanel("Storage footprint","Volume utilization across this server",disks.map(([p,d])=>serverProgress(p,d.percent,bytes(d.used_bytes)+" / "+bytes(d.total_bytes),Number(d.percent)>=90?"critical":Number(d.percent)>=80?"warning":"")).join("")||'<div class="empty">No disk telemetry reported.</div>')+
+      serverPanel("Recent server events","Latest events for this endpoint",hostEvents.slice(0,5).map(e=>'<div class="server-event"><div><strong>'+esc(e.event_type)+'</strong><small>'+esc(e.message)+'</small></div>'+severity(e.severity)+'<time>'+esc(timeAgo(e.created_at))+'</time></div>').join("")||'<div class="empty">No recent events for this server.</div>');
+  } else if(activeServerSegment==="compute"){
+    body='<div class="server-gauge-grid">'+serverGauge("CPU",cpu,"Current utilization")+serverGauge("Memory",memory,bytes(mem.used_bytes)+" used")+'<div class="server-kpi"><span>Logical cores</span><strong>'+esc(m.cpu_count||"—")+'</strong><small>Reported by agent</small></div><div class="server-kpi"><span>System uptime</span><strong>'+esc(formatUptime(m.uptime_seconds))+'</strong><small>Since last boot</small></div></div>'+serverPanel("Memory allocation","Used and available physical memory",serverProgress("Memory used",memory,bytes(mem.used_bytes)) + serverProgress("Memory available",100-memory,bytes(mem.available_bytes),"secondary"))+serverPanel("CPU and memory trend","Historical samples recorded by SentinelX",'<canvas id="server-history-chart" class="server-history-chart" height="230"></canvas><div class="chart-legend"><i class="legend-cpu"></i> CPU <i class="legend-memory"></i> Memory</div>');
+  } else if(activeServerSegment==="storage"){
+    body='<div class="server-gauge-grid"><div class="server-kpi"><span>Volumes</span><strong>'+disks.length+'</strong><small>Detected filesystems</small></div><div class="server-kpi"><span>Critical</span><strong>'+disks.filter(([,d])=>Number(d.percent)>=90).length+'</strong><small>Usage ≥ 90%</small></div><div class="server-kpi"><span>Warnings</span><strong>'+disks.filter(([,d])=>Number(d.percent)>=80&&Number(d.percent)<90).length+'</strong><small>Usage 80–89%</small></div></div>'+serverPanel("Volume utilization map","Each bar represents used capacity",disks.map(([p,d])=>'<div class="volume-visual"><div><strong>'+esc(p)+'</strong><span>'+num(d.percent)+'%</span></div>'+serverProgress("Used",d.percent,bytes(d.used_bytes)+" / "+bytes(d.total_bytes),Number(d.percent)>=90?"critical":Number(d.percent)>=80?"warning":"")+'<small>'+bytes(d.free_bytes)+' free</small></div>').join("")||'<div class="empty">No volume data reported.</div>');
+  } else if(activeServerSegment==="network"){
+    const interfaces=m.network_interfaces||{};
+    const interfaceRows=Array.isArray(interfaces)?interfaces:Object.entries(interfaces).map(([name,v])=>({name,...(v||{})}));
+    const traffic=interfaceRows.map(i=>{const name=i.name||i.interface||"Interface";const rx=Number(i.bytes_recv??i.rx_bytes??0),tx=Number(i.bytes_sent??i.tx_bytes??0);return '<div class="network-interface"><div><strong>'+esc(name)+'</strong><span>RX '+bytes(rx)+' · TX '+bytes(tx)+'</span></div><div class="network-bars"><i style="width:'+Math.min(100,rx/(Math.max(rx,tx,1))*100)+'%"></i><i style="width:'+Math.min(100,tx/(Math.max(rx,tx,1))*100)+'%"></i></div></div>';}).join("");
+    body='<div class="server-gauge-grid"><div class="server-kpi"><span>Listening sockets</span><strong>'+ports.length+'</strong><small>Reported by agent</small></div><div class="server-kpi"><span>Interfaces</span><strong>'+interfaceRows.length+'</strong><small>Network adapters</small></div></div>'+serverPanel("Interface traffic","Bytes received and sent since interface counters started",traffic||'<div class="empty">Network interface counters are not present in this telemetry snapshot.</div>')+serverPanel("Listening ports","Services exposing local sockets",ports.slice(0,100).map(p=>'<div class="server-event"><div><strong>'+esc(p.local_address||"—")+'</strong><small>PID '+esc(p.pid)+' · '+esc(p.family)+' · '+esc(p.type)+'</small></div><span class="status online">LISTEN</span></div>').join("")||'<div class="empty">No listening sockets reported.</div>');
+  } else if(activeServerSegment==="processes"){
+    const top=processes.slice().sort((a,b)=>(Number(b.memory_rss_bytes)||0)-(Number(a.memory_rss_bytes)||0)).slice(0,20);
+    const max=Math.max(1,...top.map(p=>Number(p.memory_rss_bytes)||0));
+    body=serverPanel("Top processes by memory","Largest resident-memory consumers in the latest snapshot",top.map(p=>'<div class="process-visual"><div><strong>'+esc(p.name)+'</strong><span>PID '+esc(p.pid)+' · '+esc(p.username||"unknown user")+'</span><b>'+bytes(p.memory_rss_bytes)+'</b></div><div class="server-progress"><i style="width:'+Math.min(100,(Number(p.memory_rss_bytes)||0)/max*100)+'%"></i></div></div>').join("")||'<div class="empty">No process inventory reported.</div>');
+  } else if(activeServerSegment==="services"){
+    const running=services.filter(s=>String(s.status).toLowerCase()==="running").length, stopped=services.filter(s=>String(s.status).toLowerCase()==="stopped").length;
+    body='<div class="server-gauge-grid"><div class="server-kpi"><span>Total services</span><strong>'+services.length+'</strong><small>Windows service inventory</small></div><div class="server-kpi"><span>Running</span><strong>'+running+'</strong><small>Active services</small></div><div class="server-kpi"><span>Stopped</span><strong>'+stopped+'</strong><small>Stopped services</small></div></div>'+serverPanel("Service state distribution","Running vs stopped services",serverProgress("Running",services.length?running/services.length*100:0,running+" services") + serverProgress("Stopped",services.length?stopped/services.length*100:0,stopped+" services","warning"))+serverPanel("Service inventory","Name, state, startup mode and process ID",services.slice(0,100).map(s=>'<div class="server-event"><div><strong>'+esc(s.display_name||s.name)+'</strong><small>'+esc(s.name)+' · '+esc(s.start_type)+' · PID '+esc(s.pid)+'</small></div><span class="'+(String(s.status).toLowerCase()==="running"?"av-ok":"av-no")+'">'+esc(s.status)+'</span></div>').join("")||'<div class="empty">No Windows services reported for this host.</div>');
+  } else if(activeServerSegment==="security"){
+    const counts=["critical","high","medium","low","info"].map(level=>({level,count:hostEvents.filter(e=>String(e.severity).toLowerCase()===level).length}));
+    body=serverPanel("Event severity distribution","Recent events reported for this endpoint",counts.map(c=>serverProgress(c.level,c.count?c.count/Math.max(1,hostEvents.length)*100:0,c.count+" events",c.level==="critical"||c.level==="high"?"critical":"")).join(""))+serverPanel("Event timeline","Most recent host-specific security and integrity events",hostEvents.slice(0,50).map(e=>'<div class="server-event"><div><strong>'+esc(e.event_type)+'</strong><small>'+esc(e.message)+'</small></div>'+severity(e.severity)+'<time>'+esc(timeAgo(e.created_at))+'</time></div>').join("")||'<div class="empty">No security events for this server.</div>');
+  } else {
+    const state=(v)=>v===true?'<span class="av-ok">Enabled</span>':v===false?'<span class="av-no">Disabled</span>':'<span>Unknown</span>';
+    const rows=defender?[
+      ["Defender collector",defender.available],["Antivirus",defender.antivirus_enabled],["Real-time protection",defender.real_time_protection_enabled],["Signature updated",defender.signature_last_updated||"Unknown"]
+    ]:[["ClamAV daemon",av.clamav_daemon_active],["clamd",av.clamd],["clamscan",av.clamscan],["freshclam",av.freshclam]];
+    body=serverPanel("Endpoint protection posture","Collector-reported protection configuration",rows.map(([label,value])=>'<div class="server-event"><strong>'+esc(label)+'</strong>'+(typeof value==="boolean"?state(value):'<span>'+esc(value)+'</span>')+'</div>').join("")||'<div class="empty">No endpoint protection telemetry reported.</div>')+serverPanel("Security event collector","Availability of operating-system event collection",'<div class="server-event"><strong>Collector status</strong><span>'+esc(m.security_event_collection?.available===true?"Available":m.security_event_collection?.available===false?"Unavailable":"Not reported")+'</span></div>');
+  }
+  root.innerHTML=body;
+  document.querySelectorAll("[data-server-segment]").forEach(b=>b.classList.toggle("active",b.dataset.serverSegment===activeServerSegment));
+  if(activeServerSegment==="compute")loadServerHistory(host.host_id);
+}
+async function loadServerHistory(hostId) {
+  const canvas=$("server-history-chart"); if(!canvas)return;
+  try {
+    const [cpuData,memData]=await Promise.all([
+      getJson("/api/v1/metrics/history?host_id="+encodeURIComponent(hostId)+"&metric=cpu&limit=120"),
+      getJson("/api/v1/metrics/history?host_id="+encodeURIComponent(hostId)+"&metric=memory&limit=120")
+    ]);
+    if(serverSelected()?.host_id!==hostId||!$("server-history-chart"))return;
+    const map=new Map();
+    (cpuData.samples||[]).forEach(s=>map.set(s.recorded_at,{cpu:Number(s.value)||0,memory:0}));
+    (memData.samples||[]).forEach(s=>{const p=map.get(s.recorded_at)||{cpu:0,memory:0};p.memory=Number(s.value)||0;map.set(s.recorded_at,p);});
+    serverHistory=Array.from(map.values());drawServerHistory();
+  } catch(e) { const c=$("server-history-chart");if(c){const x=c.getContext("2d");x.fillStyle="#91a4bd";x.fillText("History unavailable: "+e.message,12,24);} }
+}
+function drawServerHistory() {
+  const c=$("server-history-chart");if(!c)return;
+  const dpr=window.devicePixelRatio||1,w=Math.max(320,c.clientWidth),h=230;
+  c.width=w*dpr;c.height=h*dpr;const x=c.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,w,h);
+  const pad={l:34,r:12,t:12,b:22},cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
+  for(let v=0;v<=100;v+=25){const y=pad.t+ch*(1-v/100);x.strokeStyle="#26374d";x.beginPath();x.moveTo(pad.l,y);x.lineTo(w-pad.r,y);x.stroke();x.fillStyle="#8fa2bc";x.font="10px system-ui";x.fillText(v+"%",2,y+3);}
+  [["cpu","#39d4c5"],["memory","#a78bfa"]].forEach(([key,color])=>{if(!serverHistory.length)return;x.beginPath();serverHistory.forEach((p,i)=>{const px=pad.l+(serverHistory.length===1?cw:cw*i/(serverHistory.length-1));const py=pad.t+ch*(1-Math.max(0,Math.min(100,p[key]))/100);if(i===0)x.moveTo(px,py);else x.lineTo(px,py);});x.strokeStyle=color;x.lineWidth=2.5;x.stroke();});
+}
+
 function renderEvents() {
   const query=($("event-search")?.value||"").toLowerCase();
   const filter=$("severity-filter")?.value||"all";
@@ -377,9 +475,9 @@ function renderServices() {
 function switchView(name) {
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+name));
   document.querySelectorAll(".nav-link").forEach(v=>v.classList.toggle("active",v.dataset.view===name));
-  const titles={overview:"System overview",hosts:"Monitored hosts",disk:"Disk monitoring",events:"Security events",processes:"Running processes",network:"Network ports",antivirus:"Endpoint protection",services:"Windows services"};
+  const titles={overview:"System overview",hosts:"Monitored hosts",disk:"Disk monitoring",events:"Security events",processes:"Running processes",network:"Network ports",antivirus:"Endpoint protection",services:"Windows services",server:"Server explorer"};
   $("page-title").textContent=titles[name]||"System overview";
-  if(name==="processes")renderProcesses(); if(name==="network")renderNetwork(); if(name==="services")renderServices(); if(name==="disk"){renderDiskMonitoring();loadDiskHistory();}
+  if(name==="server")renderServerExplorer(); if(name==="processes")renderProcesses(); if(name==="network")renderNetwork(); if(name==="services")renderServices(); if(name==="disk"){renderDiskMonitoring();loadDiskHistory();}
 }
 async function refresh() {
   try {
@@ -388,7 +486,7 @@ async function refresh() {
     events=Array.isArray(eventData)?eventData:[];
     renderOverview(summaryData||{});
     await loadResourceHistory();
-    renderHosts(); renderEvents(); fillHostSelects(); renderProcesses(); renderNetwork(); renderAntivirus(); renderServices(); renderDiskMonitoring();
+    renderHosts(); renderEvents(); renderServerExplorer(); fillHostSelects(); renderProcesses(); renderNetwork(); renderAntivirus(); renderServices(); renderDiskMonitoring();
     const diskSelection=currentDiskSelection(), diskKey=diskSelection.hostId+"|"+diskSelection.mount;
     if(document.getElementById("view-disk").classList.contains("active") || diskKey!==lastDiskHistoryKey)loadDiskHistory();
     $("last-updated").textContent=new Date().toLocaleTimeString();
@@ -400,6 +498,8 @@ async function refresh() {
 }
 document.querySelectorAll("[data-view]").forEach(link=>link.addEventListener("click",e=>{e.preventDefault();const name=link.dataset.view;switchView(name);window.history.replaceState(null,"","#"+name);}));
 $("refresh-btn").addEventListener("click",refresh);
+$("server-detail-host").addEventListener("change",renderServerExplorer);
+$("server-segment-tabs").addEventListener("click",e=>{const b=e.target.closest("[data-server-segment]");if(!b)return;activeServerSegment=b.dataset.serverSegment;renderServerExplorer();});
 $("host-prev").addEventListener("click",()=>{hostOffset=Math.max(0,hostOffset-HOST_PAGE_SIZE);refresh();});
 $("host-next").addEventListener("click",()=>{hostOffset=Math.min(Math.max(0,hostTotal-HOST_PAGE_SIZE),hostOffset+HOST_PAGE_SIZE);refresh();});
 $("host-search").addEventListener("input",()=>{hostSearch=$("host-search").value.trim();hostOffset=0;refresh();});
@@ -415,6 +515,6 @@ $("disk-search").addEventListener("input",renderDiskMonitoring);
 $("disk-sort").addEventListener("change",renderDiskMonitoring);
 $("disk-table").addEventListener("click",event=>{const row=event.target.closest("[data-mount]");if(!row)return;$("disk-mount").value=row.dataset.mount;renderDiskMonitoring();loadDiskHistory();});
 $("disk-table").addEventListener("keydown",event=>{if(event.key!=="Enter"&&event.key!==" ")return;const row=event.target.closest("[data-mount]");if(!row)return;event.preventDefault();$("disk-mount").value=row.dataset.mount;renderDiskMonitoring();loadDiskHistory();});
-window.addEventListener("resize",()=>{drawChart();drawDiskHistoryChart();});
+window.addEventListener("resize",()=>{drawChart();drawDiskHistoryChart();drawServerHistory();});
 refresh();
 setInterval(refresh,REFRESH_MS);
