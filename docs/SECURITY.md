@@ -1,37 +1,42 @@
-# Security model and deployment guidance
+# SentinelX security model
 
-SentinelX is self-hosted. The operator is responsible for protecting the central server, database, credentials, network and backups.
+SentinelX is self-hosted. The operator controls the central service, database, administrator account, network and backups.
 
-## Current implementation
+## Administrator authentication
 
-- Telemetry ingestion requires the configured `SENTINELX_AGENT_TOKEN` in the `X-Agent-Token` request header.
-- The central API supports bounded telemetry payloads and idempotent batch ingestion.
-- The database is local to the installation.
-- The current token is shared by agents in one installation; it is not a per-agent credential.
-- Dashboard and monitoring read APIs currently have no built-in user login or role-based access control.
+- Configure `SENTINELX_ADMIN_USERNAME` and `SENTINELX_ADMIN_PASSWORD` before first startup.
+- The first startup creates a local administrator record with a salted PBKDF2-SHA256 password hash. The plaintext password is not stored.
+- The dashboard and monitoring/admin APIs require an authenticated administrator session.
+- Session identifiers are random, stored as SHA-256 digests, HttpOnly, SameSite=Strict, and Secure by default.
+- Set `SENTINELX_COOKIE_SECURE=false` only for isolated local HTTP development. Remote access must use HTTPS.
+- Set `SENTINELX_RESET_ADMIN_PASSWORD=true` for one startup to rotate the configured administrator password, then remove that flag.
+- Protect the environment file and database. There is no public registration or hosted account service.
 
-## Required deployment controls
+## Per-agent enrollment and revocation
 
-1. Keep the API on loopback or a private network.
-2. Put remote access behind a TLS reverse proxy and an authentication/access-control layer.
-3. Restrict agent ingestion to trusted network ranges where possible.
-4. Generate a high-entropy token and store it in a protected environment file or secret manager.
-5. Never commit tokens, database passwords, private keys or production configuration.
-6. Run the service as a dedicated unprivileged OS account.
-7. Restrict database access to the central service.
-8. Encrypt and regularly test database backups.
-9. Apply OS and Python dependency security updates.
+1. An administrator signs in and creates a short-lived one-time enrollment token through `POST /api/v1/admin/agents/enrollment-tokens`.
+2. The agent exchanges it at `POST /api/v1/agents/enroll` with its unique host ID.
+3. The central service marks the enrollment token as used and returns a random credential bound to that host.
+4. The agent stores its credential in its local SentinelX credential directory; POSIX systems use mode 0600.
+5. Telemetry must present the credential in `X-Agent-Token`; the server checks the credential, host binding and revocation state.
+6. Administrators can list enrolled agents and revoke a credential. Revocation takes effect on the next telemetry request.
 
-## Planned security work
+The shared legacy token is disabled unless `SENTINELX_ALLOW_LEGACY_AGENT_TOKEN=true` is explicitly enabled. Do not enable it for normal operation.
 
-- Local administrator bootstrap and session-based dashboard authentication.
-- Per-agent enrollment tokens and unique agent credentials.
-- Credential rotation and revocation.
-- TLS verification and hardened agent transport defaults.
-- Rate limiting and audit logging.
-- Database migrations and documented upgrade/backup procedures.
-- Security tests for authorization and enrollment.
+## Deployment requirements
 
-## Reporting a vulnerability
+- Keep the central API on loopback or a private network.
+- Use a TLS reverse proxy for remote access; never expose development Uvicorn directly to the public internet.
+- Restrict agent ingestion to trusted networks where practical.
+- Run the service as an unprivileged OS account.
+- Keep environment files and agent credential files readable only by the service/operator account.
+- Back up the database and test restoration.
+- Apply operating-system and Python dependency updates.
 
-Do not publish exploitable vulnerability details in a public issue. Contact the repository maintainers privately through the GitHub repository's security reporting mechanism when it is enabled, or request a private disclosure channel from the maintainers.
+## Current limitations
+
+The current release provides one local administrator account, not multi-user RBAC or MFA. Session login throttling and a full audit trail are not yet implemented. Protect administrator access with a private network or reverse proxy rate limiting. The Windows agent credential file relies on the permissions of the Windows account/profile directory; production installers should set an explicit restrictive ACL.
+
+## Vulnerability reporting
+
+Do not publish exploitable vulnerability details in a public issue. Use the repository's private security reporting channel when enabled.
