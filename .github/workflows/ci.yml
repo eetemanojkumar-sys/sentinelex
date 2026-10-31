@@ -1,0 +1,30 @@
+name: SentinelX CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Compile Python
+        run: python -m compileall -q agent server scripts tests
+      - name: Run API enrollment and scaling contract tests
+        run: pytest -q
+      - name: Validate dashboard JavaScript
+        run: node --check dashboard/app.js
+      - name: Validate Linux installer scripts
+        run: |
+          bash -n installers/linux/install.sh
+          bash -n installers/linux/update-central.sh
