@@ -19,7 +19,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 from sqlalchemy.sql import over
 
 BOOTSTRAP_TOKEN = os.getenv("SENTINELX_ENROLLMENT_TOKEN") or os.getenv("SENTINELX_AGENT_TOKEN", "")
-ALLOW_LEGACY_TOKEN = os.getenv("SENTINELX_ALLOW_LEGACY_TOKEN", "true").lower() in {"1", "true", "yes"}\nADMIN_TOKEN = os.getenv("SENTINELX_ADMIN_TOKEN", "")\nHISTORY_INTERVAL_SECONDS = max(60, int(os.getenv("SENTINELX_HISTORY_INTERVAL_SECONDS", "300")))
+ALLOW_LEGACY_TOKEN = os.getenv("SENTINELX_ALLOW_LEGACY_TOKEN", "true").lower() in {"1", "true", "yes"}
+ADMIN_TOKEN = os.getenv("SENTINELX_ADMIN_TOKEN", "")
+HISTORY_INTERVAL_SECONDS = max(60, int(os.getenv("SENTINELX_HISTORY_INTERVAL_SECONDS", "300")))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sentinelx.db")
 if not BOOTSTRAP_TOKEN:
     raise RuntimeError("SENTINELX_AGENT_TOKEN must be configured")
