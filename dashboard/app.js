@@ -10,7 +10,7 @@ let selectedServiceHost = "";
 let hostOffset = 0;
 let hostTotal = 0;
 let hostSearch = "";
-const HOST_PAGE_SIZE = 100;\nlet hostOffset = 0;\nlet hostTotal = 0;\nlet hostSearch = "";\nconst HOST_PAGE_SIZE = 100;
+const HOST_PAGE_SIZE = 100;
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
