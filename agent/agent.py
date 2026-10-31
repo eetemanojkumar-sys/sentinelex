@@ -3,6 +3,7 @@ import hashlib
 import os
 import platform
 import socket
+import tempfile
 import time
 from pathlib import Path
 from threading import Lock
@@ -37,6 +38,34 @@ MODEL_EXTENSIONS = {
 events = []
 event_lock = Lock()
 disk_alert_states = {}
+
+# Keep one collector per host identity. The OS releases this lock automatically
+# if the process exits or crashes, so stale lock files are harmless.
+_agent_lock_handle = None
+
+
+def acquire_single_instance_lock():
+    global _agent_lock_handle
+    lock_name = hashlib.sha256(HOST_ID.encode("utf-8")).hexdigest()[:16]
+    lock_path = Path(tempfile.gettempdir()) / f"sentinelx-agent-{lock_name}.lock"
+    handle = open(lock_path, "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write("0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, BlockingIOError):
+        handle.close()
+        return False
+    _agent_lock_handle = handle
+    return True
 
 
 def queue_event(event_type, severity, message, details=None):
@@ -157,6 +186,9 @@ def send_payload(metrics):
 def main():
     if not AGENT_TOKEN:
         raise SystemExit("SENTINELX_AGENT_TOKEN is required")
+    if not acquire_single_instance_lock():
+        print(f"Another SentinelX agent is already running for host {HOST_ID}; exiting.", flush=True)
+        raise SystemExit(0)
     observer = start_watchers()
     try:
         while True:
