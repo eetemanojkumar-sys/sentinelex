@@ -12,9 +12,10 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import (
-    Boolean, DateTime, Index, Integer, JSON, String, create_engine, desc,
+    Boolean, DateTime, Index, Integer, JSON, String, UniqueConstraint, create_engine, desc,
     func, select, text
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.sql import over
 
@@ -60,6 +61,18 @@ class AgentCredential(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+
+class IngestedBatch(Base):
+    """Idempotency ledger preventing duplicate writes for retried batches."""
+    __tablename__ = "ingested_batches"
+    __table_args__ = (
+        UniqueConstraint("host_id", "batch_id", name="uq_ingested_batch_host_batch"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(255), index=True)
+    batch_id: Mapped[str] = mapped_column(String(64))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class Telemetry(Base):
@@ -122,7 +135,12 @@ class EventIn(BaseModel):
 
 class TelemetryIn(BaseModel):
     host_id: str = Field(min_length=1, max_length=255)
-    metrics: dict[str, Any]
+    batch_id: str | None = Field(default=None, min_length=1, max_length=64)
+    schema_version: int = Field(default=1, ge=1, le=100)
+    agent: dict[str, Any] = Field(default_factory=dict)
+    collected_at: datetime | None = None
+    sequence: int = Field(default=0, ge=0)
+    metrics: dict[str, Any>
     events: list[EventIn] = Field(default_factory=list, max_length=500)
 
 
@@ -229,6 +247,17 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
         raise HTTPException(status_code=403, detail="Host identity does not match enrolled agent")
 
     now = utcnow()
+    if payload.batch_id:
+        db.add(IngestedBatch(host_id=payload.host_id, batch_id=payload.batch_id))
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            return {
+                "accepted": True, "duplicate": True,
+                "host_id": payload.host_id, "events_received": 0,
+            }
+
     latest_row = db.get(HostLatest, payload.host_id)
     if latest_row:
         latest_row.received_at = now
@@ -236,8 +265,7 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
     else:
         db.add(HostLatest(host_id=payload.host_id, received_at=now, metrics=payload.metrics))
 
-    # Keep a lower-frequency historical sample while updating the live snapshot
-    # on every heartbeat. This limits write amplification for large fleets.
+    # Keep the live snapshot current while limiting historical writes.
     last_history = db.scalar(
         select(func.max(Telemetry.received_at)).where(Telemetry.host_id == payload.host_id)
     )
@@ -249,19 +277,19 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
     if payload.events:
         db.add_all([
             SecurityEvent(
-                host_id=payload.host_id,
-                event_type=event.event_type,
-                severity=event.severity,
-                message=event.message,
-                details=event.details,
-                created_at=now,
+                host_id=payload.host_id, event_type=event.event_type,
+                severity=event.severity, message=event.message,
+                details=event.details, created_at=now,
             )
             for event in payload.events
         ])
     if credential:
         credential.last_seen = now
     db.commit()
-    return {"accepted": True, "host_id": payload.host_id, "events_received": len(payload.events)}
+    return {
+        "accepted": True, "host_id": payload.host_id,
+        "events_received": len(payload.events),
+    }
 
 
 @app.get("/api/v1/hosts")
@@ -347,3 +375,32 @@ def disk_history(host_id: str = Query(min_length=1, max_length=255),
                 "free_bytes": volume.get("free_bytes"),
             })
     return {"host_id": host_id, "mountpoint": mountpoint, "samples": samples[-limit:]}
+
+
+@app.get("/api/v1/metrics/history")
+def metrics_history(host_id: str = Query(min_length=1, max_length=255),
+                    metric: str = Query(default="cpu", regex="^(cpu|memory|network)$"),
+                    limit: int = Query(default=120, ge=2, le=500),
+                    _admin: bool = Depends(authenticate_admin),
+                    db: Session = Depends(db_session)):
+    """Return bounded historical CPU, memory or network samples for one host."""
+    if metric not in {"cpu", "memory", "network"}:
+        raise HTTPException(status_code=400, detail="metric must be cpu, memory, or network")
+    limit = max(2, min(limit, 500))
+    rows = db.scalars(select(Telemetry).where(Telemetry.host_id == host_id)
+                      .order_by(desc(Telemetry.received_at)).limit(limit)).all()
+    samples = []
+    for row in reversed(rows):
+        data = row.metrics or {}
+        if metric == "cpu":
+            value = data.get("cpu_percent")
+            sample = {"recorded_at": row.received_at, "value": value}
+        elif metric == "memory":
+            memory = data.get("memory") or {}
+            sample = {"recorded_at": row.received_at, "value": memory.get("percent")}
+        else:
+            interfaces = data.get("network_interfaces") or {}
+            sample = {"recorded_at": row.received_at, "interfaces": interfaces}
+        if metric == "network" or sample.get("value") is not None:
+            samples.append(sample)
+    return {"host_id": host_id, "metric": metric, "samples": samples}
