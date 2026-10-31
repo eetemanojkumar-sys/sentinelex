@@ -18,7 +18,7 @@ class LinuxCollectorTests(unittest.TestCase):
     @patch.object(common.psutil, "disk_partitions", return_value=[])
     @patch.object(common.psutil, "process_iter", return_value=[])
     @patch.object(common.psutil, "net_connections", return_value=[])
-    @patch.object(common.psutil, "sensors_temperatures", return_value={})
+    @patch.object(common.psutil, "sensors_temperatures", return_value={}, create=True)
     def test_preserves_legacy_metric_schema(
         self, _temps, _connections, _processes, _partitions, virtual_memory,
         _boot, _cpu, _antivirus
@@ -49,7 +49,7 @@ class LinuxCollectorTests(unittest.TestCase):
              patch.object(common.psutil, "disk_usage", return_value=fake_usage), \
              patch.object(common.psutil, "process_iter", return_value=[]), \
              patch.object(common.psutil, "net_connections", return_value=[]), \
-             patch.object(common.psutil, "sensors_temperatures", return_value={}), \
+             patch.object(common.psutil, "sensors_temperatures", return_value={}, create=True), \
              patch.object(common.psutil, "virtual_memory",
                           return_value=SimpleNamespace(total=100, available=50, percent=50)), \
              patch.object(common.psutil, "boot_time", return_value=1000.0), \
