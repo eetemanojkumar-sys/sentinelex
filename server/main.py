@@ -8,7 +8,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, Integer, JSON, String, create_engine, desc, select
+from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, create_engine, desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
@@ -33,6 +34,20 @@ class Telemetry(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class IngestedBatch(Base):
+    """Idempotency ledger: one accepted batch per host and batch identifier."""
+    __tablename__ = "ingested_batches"
+    __table_args__ = (
+        UniqueConstraint("host_id", "batch_id", name="uq_ingested_batch_host_batch"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(255), index=True)
+    batch_id: Mapped[str] = mapped_column(String(64))
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
 
 
 class Host(Base):
@@ -101,6 +116,7 @@ class AgentInfo(BaseModel):
 
 class TelemetryIn(BaseModel):
     host_id: str = Field(min_length=1, max_length=255)
+    batch_id: str | None = Field(default=None, min_length=1, max_length=64)
     metrics: dict[str, Any]
     events: list[EventIn] = Field(default_factory=list, max_length=500)
     schema_version: int = Field(default=1, ge=1, le=100)
@@ -132,6 +148,21 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
            db: Session = Depends(db_session)):
     verify_agent(x_agent_token)
     now = datetime.now(timezone.utc)
+    if payload.batch_id:
+        # Flush the unique idempotency record before writing any telemetry.
+        # A retry after a lost HTTP response is acknowledged without duplicating
+        # metric samples, host updates, or security events.
+        db.add(IngestedBatch(host_id=payload.host_id, batch_id=payload.batch_id))
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            return {
+                "accepted": True,
+                "duplicate": True,
+                "host_id": payload.host_id,
+                "events_received": 0,
+            }
     db.add(Telemetry(host_id=payload.host_id, metrics=payload.metrics))
     snapshot = db.get(LatestMetrics, payload.host_id)
     if snapshot is None:
