@@ -6,6 +6,7 @@ from pathlib import Path
 
 _TEST_DB = tempfile.TemporaryDirectory()
 os.environ["SENTINELX_ADMIN_PASSWORD"] = "Test-Admin-Password-123!"
+os.environ["SENTINELX_COOKIE_SECURE"] = "false"
 os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(_TEST_DB.name) / "ingestion-test.db")
 
 from server import main
