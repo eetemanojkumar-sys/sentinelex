@@ -2,12 +2,18 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$CentralUrl,
-    [Parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$BootstrapToken,
+    [string]$BootstrapToken,
     [ValidateRange(5,3600)][int]$IntervalSeconds = 30,
     [string]$InstallDir = "$env:ProgramFiles\SentinelX"
 )
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+if ([string]::IsNullOrWhiteSpace($BootstrapToken)) {
+    $SecureToken = Read-Host "Enter SentinelX bootstrap token" -AsSecureString
+    $Ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureToken)
+    try { $BootstrapToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($Ptr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Ptr) }
+}
 function Write-Step([string]$Message) { Write-Host "[SentinelX] $Message" -ForegroundColor Cyan }
 
 if ($CentralUrl -notmatch '^https?://') { throw "CentralUrl must start with http:// or https://." }
