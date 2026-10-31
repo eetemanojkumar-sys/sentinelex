@@ -220,8 +220,6 @@ def hosts(db: Session = Depends(db_session)):
 
 
 @app.get("/api/v1/events")
-# Fail closed: these legacy queries are not yet tenant-scoped.
-# The dependency intentionally blocks access until migration and isolation tests are complete.
 def events(limit: int = 100, db: Session = Depends(db_session)):
     limit = max(1, min(limit, 500))
     rows = db.scalars(
