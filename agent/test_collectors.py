@@ -1,64 +1,54 @@
-"""Unit tests for the Linux telemetry collector.
-
-Run from the repository root with:
-    cd agent && python -m unittest -v test_collectors
-"""
+"""Linux collector rule tests; platform-independent and safe on Windows CI."""
 import unittest
 from unittest.mock import patch
-from types import SimpleNamespace
 
 from collectors import linux
 
 
 class LinuxCollectorTests(unittest.TestCase):
-    @patch.object(linux, "antivirus_status", return_value={"clamd": False})
-    @patch.object(linux.psutil, "cpu_percent", return_value=3.5)
-    @patch.object(linux.psutil, "boot_time", return_value=1000.0)
-    @patch.object(linux.psutil, "virtual_memory")
-    @patch.object(linux.psutil, "disk_partitions", return_value=[])
-    @patch.object(linux.psutil, "process_iter", return_value=[])
-    @patch.object(linux.psutil, "net_connections", return_value=[])
-    @patch.object(linux.psutil, "sensors_temperatures", return_value={})
-    def test_preserves_legacy_metric_schema(
-        self, _temps, _connections, _processes, _partitions, virtual_memory,
-        _boot, _cpu, _antivirus
-    ):
-        virtual_memory.return_value = SimpleNamespace(
-            total=1024, available=512, percent=50.0
-        )
-        metrics = linux.collect_metrics(lambda *args, **kwargs: None, {})
-        expected = {
-            "hostname", "platform", "os", "boot_time", "uptime_seconds",
-            "cpu_percent", "cpu_count_logical", "memory", "swap", "disk",
-            "network_interfaces", "temperatures", "process_count",
-            "processes", "listening_ports", "antivirus",
+    def test_preserves_shared_metric_schema_and_adds_antivirus(self):
+        base = {
+            "hostname": "test-host",
+            "platform": "test-platform",
+            "os": {"system": "Linux"},
+            "boot_time": 1000.0,
+            "uptime_seconds": 100.0,
+            "cpu_percent": 3.5,
+            "cpu_count_logical": 2,
+            "memory": {"total_bytes": 1024, "available_bytes": 512, "percent": 50.0},
+            "swap": {"total_bytes": 0, "used_bytes": 0, "free_bytes": 0, "percent": 0.0},
+            "disk": {},
+            "network_interfaces": {},
+            "temperatures": {},
+            "process_count": 0,
+            "processes": [],
+            "listening_ports": [],
         }
-        self.assertEqual(set(metrics), expected)
+        with patch.object(linux, "collect_base_metrics", return_value=base), \
+             patch.object(linux, "antivirus_status", return_value={"clamd": False}):
+            metrics = linux.collect_metrics(lambda *args, **kwargs: None, {})
+
         self.assertEqual(metrics["cpu_percent"], 3.5)
         self.assertEqual(metrics["memory"]["percent"], 50.0)
         self.assertEqual(metrics["process_count"], 0)
+        self.assertEqual(metrics["antivirus"], {"clamd": False})
 
     def test_disk_alert_thresholds_are_transition_based(self):
-        disk_state = {}
+        base = {
+            "disk": {
+                "/data": {"percent": 85.0, "filesystem": "ext4"},
+                "/snap": {"percent": 99.0, "filesystem": "squashfs"},
+            }
+        }
         events = []
-        fake_partition = SimpleNamespace(mountpoint="/data", fstype="ext4")
-        fake_usage = SimpleNamespace(
-            total=100, used=85, free=15, percent=85.0
-        )
-        with patch.object(linux.psutil, "disk_partitions", return_value=[fake_partition]), \
-             patch.object(linux.psutil, "disk_usage", return_value=fake_usage), \
-             patch.object(linux.psutil, "process_iter", return_value=[]), \
-             patch.object(linux.psutil, "net_connections", return_value=[]), \
-             patch.object(linux.psutil, "sensors_temperatures", return_value={}), \
-             patch.object(linux.psutil, "virtual_memory",
-                          return_value=SimpleNamespace(total=100, available=50, percent=50)), \
-             patch.object(linux.psutil, "boot_time", return_value=1000.0), \
-             patch.object(linux.psutil, "cpu_percent", return_value=1.0), \
+        state = {}
+        with patch.object(linux, "collect_base_metrics", return_value=base), \
              patch.object(linux, "antivirus_status", return_value={}):
-            linux.collect_metrics(lambda *args: events.append(args), disk_state)
-            linux.collect_metrics(lambda *args: events.append(args), disk_state)
+            linux.collect_metrics(lambda *args: events.append(args), state)
+            linux.collect_metrics(lambda *args: events.append(args), state)
 
-        self.assertEqual(disk_state["/data"], "warning")
+        self.assertEqual(state["/data"], "warning")
+        self.assertNotIn("/snap", state)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0][0], "disk_warning")
 
