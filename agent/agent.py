@@ -6,7 +6,6 @@ import socket
 import tempfile
 import time
 import uuid
-import uuid
 from pathlib import Path
 from threading import Lock
 
@@ -17,7 +16,9 @@ from watchdog.observers import Observer
 from outbox import acknowledge_batch, enqueue_batch, get_pending_batch
 
 CENTRAL_URL = os.getenv("SENTINELX_URL", "http://127.0.0.1:8000").rstrip("/")
-AGENT_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
+ENROLLMENT_TOKEN = os.getenv("SENTINELX_ENROLLMENT_TOKEN", "")
+CREDENTIAL_DIR = Path(os.getenv("SENTINELX_CREDENTIAL_DIR", str(Path.home() / ".sentinelx")))
+CREDENTIAL_FILE = CREDENTIAL_DIR / "agent-token"
 HOST_ID = os.getenv("SENTINELX_HOST_ID", socket.gethostname())
 INTERVAL = max(5, int(os.getenv("SENTINELX_INTERVAL", "30")))
 AGENT_VERSION = "0.2.0"
@@ -167,7 +168,29 @@ def start_watchers():
     return observer
 
 
-def send_payload(metrics):
+def load_agent_token():
+    """Load a per-host credential or exchange a one-time enrollment token."""
+    if CREDENTIAL_FILE.is_file():
+        token = CREDENTIAL_FILE.read_text(encoding="utf-8").strip()
+        if token:
+            return token
+    if not ENROLLMENT_TOKEN:
+        raise SystemExit("No agent credential found. Set SENTINELX_ENROLLMENT_TOKEN for first enrollment.")
+    response = requests.post(
+        f"{CENTRAL_URL}/api/v1/agents/enroll",
+        json={"enrollment_token": ENROLLMENT_TOKEN, "host_id": HOST_ID},
+        timeout=15,
+    )
+    response.raise_for_status()
+    token = response.json()["agent_token"]
+    CREDENTIAL_DIR.mkdir(parents=True, exist_ok=True)
+    CREDENTIAL_FILE.write_text(token + "\n", encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(CREDENTIAL_FILE, 0o600)
+    return token
+
+
+def send_payload(metrics, agent_token):
     """Persist one immutable batch and retry it until the API acknowledges it."""
     global sequence
     payload = get_pending_batch()
@@ -197,7 +220,7 @@ def send_payload(metrics):
         response = requests.post(
             f"{CENTRAL_URL}/api/v1/telemetry",
             json=payload,
-            headers={"X-Agent-Token": AGENT_TOKEN},
+            headers={"X-Agent-Token": agent_token},
             timeout=10,
         )
         response.raise_for_status()
@@ -209,8 +232,7 @@ def send_payload(metrics):
 
 
 def main():
-    if not AGENT_TOKEN:
-        raise SystemExit("SENTINELX_AGENT_TOKEN is required")
+    agent_token = load_agent_token()
     if not acquire_single_instance_lock():
         print(f"Another SentinelX agent is already running for host {HOST_ID}; exiting.", flush=True)
         raise SystemExit(0)
@@ -218,7 +240,7 @@ def main():
     try:
         while True:
             try:
-                send_payload(collect_metrics(queue_event, disk_alert_states))
+                send_payload(collect_metrics(queue_event, disk_alert_states), agent_token)
             except Exception as exc:
                 print(f"Collection error: {exc}", flush=True)
             time.sleep(INTERVAL)
