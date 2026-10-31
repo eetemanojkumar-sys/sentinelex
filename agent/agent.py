@@ -5,6 +5,7 @@ import platform
 import socket
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from threading import Lock
 
@@ -18,6 +19,7 @@ HOST_ID = os.getenv("SENTINELX_HOST_ID", socket.gethostname())
 INTERVAL = max(5, int(os.getenv("SENTINELX_INTERVAL", "30")))
 AGENT_VERSION = "0.2.0"
 sequence = 0
+pending_payload = None
 
 if platform.system() == "Windows":
     DEFAULT_WATCH_PATHS = r"C:\Windows\System32\drivers\etc"
@@ -48,8 +50,9 @@ def acquire_single_instance_lock():
     global _agent_lock_handle
     lock_name = hashlib.sha256(HOST_ID.encode("utf-8")).hexdigest()[:16]
     lock_path = Path(tempfile.gettempdir()) / f"sentinelx-agent-{lock_name}.lock"
-    handle = open(lock_path, "a+")
+    handle = None
     try:
+        handle = open(lock_path, "a+")
         if os.name == "nt":
             import msvcrt
             handle.seek(0, os.SEEK_END)
@@ -62,7 +65,8 @@ def acquire_single_instance_lock():
             import fcntl
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (OSError, BlockingIOError):
-        handle.close()
+        if handle is not None:
+            handle.close()
         return False
     _agent_lock_handle = handle
     return True
@@ -162,25 +166,42 @@ def start_watchers():
 
 
 def send_payload(metrics):
-    global sequence
-    sequence += 1
-    with event_lock:
-        batch = events[:]
-        del events[:]
-    payload = {"schema_version": 1, "host_id": HOST_ID, "agent": {"version": AGENT_VERSION, "platform": platform.system(), "architecture": platform.machine()}, "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "sequence": sequence, "metrics": metrics, "events": batch}
+    """Send one immutable batch until it is acknowledged by the central API."""
+    global sequence, pending_payload
+    if pending_payload is None:
+        sequence += 1
+        with event_lock:
+            batch = events[:]
+            del events[:]
+        pending_payload = {
+            "schema_version": 1,
+            "host_id": HOST_ID,
+            "batch_id": uuid.uuid4().hex,
+            "agent": {
+                "version": AGENT_VERSION,
+                "platform": platform.system(),
+                "architecture": platform.machine(),
+            },
+            "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "sequence": sequence,
+            "metrics": metrics,
+            "events": batch,
+        }
+    batch_size = len(pending_payload["events"])
     try:
         response = requests.post(
             f"{CENTRAL_URL}/api/v1/telemetry",
-            json=payload,
+            json=pending_payload,
             headers={"X-Agent-Token": AGENT_TOKEN},
             timeout=10,
         )
         response.raise_for_status()
-        print(f"Telemetry sent; events={len(batch)}", flush=True)
+        print(f"Telemetry acknowledged; events={batch_size}", flush=True)
+        pending_payload = None
     except requests.RequestException as exc:
-        with event_lock:
-            events[:0] = batch
-        print(f"Telemetry delivery failed: {exc}", flush=True)
+        # Retain the exact payload and batch ID. If the server committed it but
+        # the response was lost, retrying is safe because ingestion is idempotent.
+        print(f"Telemetry delivery pending acknowledgement: {exc}", flush=True)
 
 
 def main():
