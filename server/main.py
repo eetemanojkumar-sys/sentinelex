@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, create_engine, desc, select
+from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, create_engine, desc, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -117,15 +117,18 @@ class SecurityEvent(Base):
 
 
 Base.metadata.create_all(bind=engine)
-if ADMIN_PASSWORD:
-    with SessionLocal() as _db:
-        _admin = _db.scalar(select(Admin).where(Admin.username == ADMIN_USERNAME))
-        if _admin is None:
-            _db.add(Admin(username=ADMIN_USERNAME, password_hash=hash_password(ADMIN_PASSWORD)))
-            _db.commit()
-        elif os.getenv("SENTINELX_RESET_ADMIN_PASSWORD", "false").lower() == "true":
-            _admin.password_hash = hash_password(ADMIN_PASSWORD)
-            _db.commit()
+if not ADMIN_PASSWORD:
+    raise RuntimeError("SENTINELX_ADMIN_PASSWORD must be configured before starting SentinelX")
+if len(ADMIN_PASSWORD) < 12:
+    raise RuntimeError("SENTINELX_ADMIN_PASSWORD must contain at least 12 characters")
+with SessionLocal() as _db:
+    _admin = _db.scalar(select(Admin).where(Admin.username == ADMIN_USERNAME))
+    if _admin is None:
+        _db.add(Admin(username=ADMIN_USERNAME, password_hash=hash_password(ADMIN_PASSWORD)))
+        _db.commit()
+    elif os.getenv("SENTINELX_RESET_ADMIN_PASSWORD", "false").lower() == "true":
+        _admin.password_hash = hash_password(ADMIN_PASSWORD)
+        _db.commit()
 
 app = FastAPI(title="SentinelX Central API", version="0.3.0",
               description="Self-hosted cross-platform infrastructure monitoring and security telemetry.")
@@ -228,14 +231,14 @@ class EnrollmentIn(BaseModel):
 @app.post("/api/v1/agents/enroll")
 def enroll_agent(payload: EnrollmentIn, db: Session = Depends(db_session)):
     now = datetime.now(timezone.utc)
-    enrollment = db.scalar(select(EnrollmentToken).where(
+    claimed = db.execute(update(EnrollmentToken).where(
         EnrollmentToken.token_hash == hash_secret(payload.enrollment_token),
         EnrollmentToken.used_at.is_(None), EnrollmentToken.revoked_at.is_(None),
-        EnrollmentToken.expires_at > now))
-    if enrollment is None:
+        EnrollmentToken.expires_at > now).values(used_at=now))
+    if claimed.rowcount != 1:
+        db.rollback()
         raise HTTPException(status_code=401, detail="Enrollment token is invalid, expired, or already used")
     credential = generate_secret()
-    enrollment.used_at = now
     db.add(AgentCredential(id=secrets.token_hex(16), host_id=payload.host_id,
                            token_hash=hash_secret(credential)))
     try:
