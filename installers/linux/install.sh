@@ -70,7 +70,7 @@ umask 077
   printf 'SENTINELX_URL=%s\n' "$CENTRAL_URL"
   printf 'SENTINELX_AGENT_TOKEN=%s\n' "$AGENT_TOKEN"
   printf 'SENTINELX_HOST_ID=%s\n' "$(hostname)"
-  printf 'SENTINELX_INTERVAL=60\n'
+  printf 'SENTINELX_INTERVAL=%s\n' "$AGENT_INTERVAL"
   [[ -z "$CA_LINE" ]] || printf '%s\n' "$CA_LINE"
 } > "$CONFIG_DIR/agent.env"
 unset AGENT_TOKEN SENTINELX_BOOTSTRAP_TOKEN
