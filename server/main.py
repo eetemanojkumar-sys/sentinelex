@@ -18,7 +18,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.sql import over
 
-BOOTSTRAP_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")\nADMIN_TOKEN = os.getenv("SENTINELX_ADMIN_TOKEN", "")\nHISTORY_INTERVAL_SECONDS = max(60, int(os.getenv("SENTINELX_HISTORY_INTERVAL_SECONDS", "300")))
+BOOTSTRAP_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
+ADMIN_TOKEN = os.getenv("SENTINELX_ADMIN_TOKEN", "")
+HISTORY_INTERVAL_SECONDS = max(60, int(os.getenv("SENTINELX_HISTORY_INTERVAL_SECONDS", "300")))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sentinelx.db")
 if not BOOTSTRAP_TOKEN:
     raise RuntimeError("SENTINELX_AGENT_TOKEN must be configured")
@@ -86,6 +88,15 @@ class SecurityEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
+
+class HostLatest(Base):
+    """Most recent telemetry snapshot for each endpoint."""
+    __tablename__ = "host_latest"
+    host_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -132,6 +143,15 @@ def db_session():
 def token_digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
+
+
+def authenticate_admin(authorization: str | None = Header(default=None)):
+    if not ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="Administrator access is not configured")
+    scheme, _, supplied = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not supplied or not secrets.compare_digest(supplied, ADMIN_TOKEN):
+        raise HTTPException(status_code=401, detail="Administrator authentication required")
+    return True
 
 def authenticate_agent(token: str | None, db: Session):
     if not token:
@@ -245,7 +265,7 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
 
 
 @app.get("/api/v1/hosts")
-def hosts(response: Response, limit: int = Query(default=100, ge=1, le=250),
+def hosts(response: Response, _admin: bool = Depends(authenticate_admin), limit: int = Query(default=100, ge=1, le=250),
           offset: int = Query(default=0, ge=0), search: str | None = None,
           db: Session = Depends(db_session)):
     query = select(HostLatest)
@@ -262,8 +282,11 @@ def hosts(response: Response, limit: int = Query(default=100, ge=1, le=250),
         "host_id": row.host_id,
         "last_seen": row.received_at,
         "metrics": row.metrics,
-    } for row in rows]\n\n\n@app.get("/api/v1/summary")
-def summary(db: Session = Depends(db_session)):
+    } for row in rows]
+
+
+@app.get("/api/v1/summary")
+def summary(_admin: bool = Depends(authenticate_admin), db: Session = Depends(db_session)):
     host_count = db.scalar(select(func.count()).select_from(HostLatest)) or 0
     latest_hosts = db.scalars(
         select(HostLatest).order_by(desc(HostLatest.received_at)).limit(20)
@@ -282,3 +305,45 @@ def summary(db: Session = Depends(db_session)):
             "created_at": event.created_at,
         } for event in recent],
     }
+
+
+@app.get("/api/v1/events")
+def events(limit: int = Query(default=100, ge=1, le=500),
+           _admin: bool = Depends(authenticate_admin),
+           db: Session = Depends(db_session)):
+    rows = db.scalars(
+        select(SecurityEvent).order_by(desc(SecurityEvent.created_at)).limit(limit)
+    ).all()
+    return [{
+        "host_id": row.host_id,
+        "event_type": row.event_type,
+        "severity": row.severity,
+        "message": row.message,
+        "details": row.details,
+        "created_at": row.created_at,
+    } for row in rows]
+
+
+@app.get("/api/v1/disk-history")
+def disk_history(host_id: str = Query(min_length=1, max_length=255),
+                 mountpoint: str = Query(min_length=1, max_length=1024),
+                 limit: int = Query(default=120, ge=1, le=500),
+                 _admin: bool = Depends(authenticate_admin),
+                 db: Session = Depends(db_session)):
+    rows = db.scalars(
+        select(Telemetry).where(Telemetry.host_id == host_id)
+        .order_by(desc(Telemetry.received_at)).limit(500)
+    ).all()
+    samples = []
+    for row in reversed(rows):
+        disk = (row.metrics or {}).get("disk") or {}
+        volume = disk.get(mountpoint)
+        if isinstance(volume, dict) and "percent" in volume:
+            samples.append({
+                "received_at": row.received_at,
+                "percent": volume.get("percent"),
+                "total_bytes": volume.get("total_bytes"),
+                "used_bytes": volume.get("used_bytes"),
+                "free_bytes": volume.get("free_bytes"),
+            })
+    return {"host_id": host_id, "mountpoint": mountpoint, "samples": samples[-limit:]}
