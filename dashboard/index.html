@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b1220">
-  <title>SentinelX | Linux Monitoring</title>
+  <title>SentinelX | Infrastructure Monitoring</title>
   <link rel="stylesheet" href="/dashboard/styles.css">
   <script src="/dashboard/app.js" defer></script>
 </head>
@@ -13,7 +13,7 @@
     <aside class="sidebar">
       <a class="brand" href="/dashboard/" aria-label="SentinelX home">
         <span class="brand-mark">S</span>
-        <span><strong>SentinelX</strong><small>LINUX OPERATIONS</small></span>
+        <span><strong>SentinelX</strong><small>INFRASTRUCTURE OPERATIONS</small></span>
       </a>
       <div class="side-label">MONITORING</div>
       <nav class="nav">
@@ -33,12 +33,12 @@
 
     <main class="main">
       <header class="topbar">
-        <div><div class="eyebrow">LINUX FLEET / CENTRAL VIEW</div><h1 id="page-title">System overview</h1></div>
+        <div><div class="eyebrow">CROSS-PLATFORM FLEET / CENTRAL VIEW</div><h1 id="page-title">System overview</h1></div>
         <div class="top-actions"><span class="updated">Last updated <strong id="last-updated">—</strong></span><button class="refresh-btn" id="refresh-btn" type="button">↻ <span>Refresh</span></button></div>
       </header>
 
       <section class="view active" id="view-overview">
-        <div class="welcome-row"><div><h2>Infrastructure at a glance</h2><p>Live health and security telemetry from your Linux endpoints.</p></div><span class="live-pill"><i></i> LIVE MONITORING</span></div>
+        <div class="welcome-row"><div><h2>Infrastructure at a glance</h2><p>Live health and security telemetry from your Linux and Windows endpoints.</p></div><span class="live-pill"><i></i> LIVE MONITORING</span></div>
         <div class="metric-grid">
           <article class="metric-card"><div class="metric-head"><span>Connected hosts</span><span class="metric-icon cyan">▣</span></div><div class="metric-value" id="host-count">—</div><div class="metric-foot">Reporting to central API</div></article>
           <article class="metric-card"><div class="metric-head"><span>CPU utilization</span><span class="metric-icon violet">⌁</span></div><div class="metric-value"><span id="cpu-value">—</span><small>%</small></div><div class="meter"><i id="cpu-meter"></i></div><div class="metric-foot">Latest host sample</div></article>
