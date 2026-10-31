@@ -61,7 +61,7 @@ function setConnection(ok, message) {
   $("connection-label").textContent = message;
 }
 function renderOverview(summary) {
-  const latest = hosts[0]?.metrics || {};
+  const latest = summary.latest_hosts?.[0]?.metrics || hosts[0]?.metrics || {};
   const cpu = Number(latest.cpu_percent);
   const mem = Number(latest.memory?.percent);
   $("host-count").textContent = summary.monitored_hosts ?? hosts.length;
