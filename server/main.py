@@ -63,6 +63,13 @@ class AgentCredential(Base):
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 
+class HostLatest(Base):
+    __tablename__ = "host_latest"
+    host_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class Telemetry(Base):
     __tablename__ = "telemetry"
     __table_args__ = (
