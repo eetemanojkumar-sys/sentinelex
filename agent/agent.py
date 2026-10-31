@@ -232,10 +232,10 @@ def send_payload(metrics, agent_token):
 
 
 def main():
-    agent_token = load_agent_token()
     if not acquire_single_instance_lock():
         print(f"Another SentinelX agent is already running for host {HOST_ID}; exiting.", flush=True)
         raise SystemExit(0)
+    agent_token = load_agent_token()
     observer = start_watchers()
     try:
         while True:
