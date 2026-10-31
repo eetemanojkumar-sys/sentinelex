@@ -126,15 +126,15 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
     now = datetime.now(timezone.utc)
     db.add(Telemetry(host_id=payload.host_id, metrics=payload.metrics))
     host = db.get(Host, payload.host_id)
-    identity = payload.metrics.get("identity", {}) if isinstance(payload.metrics, dict) else {}
-    identity = identity if isinstance(identity, dict) else {}
+    os_info = payload.metrics.get("os", {}) if isinstance(payload.metrics, dict) else {}
+    os_info = os_info if isinstance(os_info, dict) else {}
     if host is None:
         host = Host(host_id=payload.host_id)
         db.add(host)
-    host.hostname = str(identity.get("hostname") or payload.host_id)[:255]
-    host.platform = str(payload.agent.platform or identity.get("system") or payload.metrics.get("platform") or "")[:100]
-    host.os_release = str(identity.get("release") or identity.get("version") or "")[:255]
-    host.architecture = str(payload.agent.architecture or identity.get("machine") or "")[:100]
+    host.hostname = str(payload.metrics.get("hostname") or payload.host_id)[:255]
+    host.platform = str(payload.agent.platform or os_info.get("system") or payload.metrics.get("platform") or "")[:100]
+    host.os_release = str(os_info.get("release") or os_info.get("version") or "")[:255]
+    host.architecture = str(payload.agent.architecture or os_info.get("machine") or "")[:100]
     host.agent_version = payload.agent.version[:50]
     host.last_seen = now
     host.last_sequence = max(host.last_sequence or 0, payload.sequence)
