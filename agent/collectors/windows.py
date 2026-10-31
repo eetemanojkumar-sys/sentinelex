@@ -58,7 +58,7 @@ def windows_services(limit=250):
             except (OSError, psutil.AccessDenied):
                 continue
         return {"available": True, "items": services}
-    except (OSError, __import__("psutil").AccessDenied):
+    except (OSError, psutil.AccessDenied):
         return {"available": False, "items": []}
 
 
