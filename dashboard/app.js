@@ -6,6 +6,7 @@ let events = [];
 let selectedHost = "";
 let diskHistory = [];
 let lastDiskHistoryKey = "";
+let selectedServiceHost = "";
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -98,8 +99,13 @@ function renderHosts() {
   $("hosts-grid").innerHTML = hosts.map(host => {
     const m=host.metrics||{}, mem=m.memory||{}, disks=Object.entries(m.disk||{});
     const online=isOnline(host.last_seen);
+    const osName=m.os?.system || (String(m.platform||"").toLowerCase().includes("windows")?"Windows":"Linux");
+    const serviceCount=Array.isArray(m.services?.items)?m.services.items.length:"—";
+    const protection=m.antivirus?.microsoft_defender?.available
+      ? (m.antivirus.microsoft_defender.antivirus_enabled ? "Defender on" : "Defender off")
+      : (m.antivirus?.clamd !== undefined ? "ClamAV checked" : "Protection —");
     const diskMarkup=disks.length ? disks.map(([mount,d]) => '<div class="host-stat"><span>Disk ' + esc(mount) + '</span><strong>' + num(d.percent) + '%</strong></div>').join("") : '<div class="host-stat"><span>Disk</span><strong>—</strong></div>';
-    return '<article class="host-card"><div class="host-card-head"><div><h3>' + esc(host.host_id) + '</h3><div class="host-platform">' + esc(m.platform) + '</div></div><span class="status ' + (online?"online":"stale") + '">' + (online?"Online":"Stale") + '</span></div><div class="host-stats"><div class="host-stat"><span>CPU</span><strong>' + num(m.cpu_percent) + '%</strong></div><div class="host-stat"><span>Memory</span><strong>' + num(mem.percent) + '%</strong></div><div class="host-stat"><span>Processes</span><strong>' + esc(m.process_count) + '</strong></div><div class="host-stat"><span>Listening ports</span><strong>' + (m.listening_ports||[]).length + '</strong></div>' + diskMarkup + '</div><div class="host-last">Last report: ' + esc(timeAgo(host.last_seen)) + ' · Uptime: ' + esc(formatUptime(m.uptime_seconds)) + '</div></article>';
+    return '<article class="host-card"><div class="host-card-head"><div><h3>' + esc(host.host_id) + '</h3><div class="host-platform">' + esc(osName) + ' · ' + esc(m.os?.release || m.platform || "OS details unavailable") + '</div></div><span class="status ' + (online?"online":"stale") + '">' + (online?"Online":"Stale") + '</span></div><div class="host-stats"><div class="host-stat"><span>CPU</span><strong>' + num(m.cpu_percent) + '%</strong></div><div class="host-stat"><span>Memory</span><strong>' + num(mem.percent) + '%</strong></div><div class="host-stat"><span>Processes</span><strong>' + esc(m.process_count) + '</strong></div><div class="host-stat"><span>Listening ports</span><strong>' + (m.listening_ports||[]).length + '</strong></div><div class="host-stat"><span>Services</span><strong>' + esc(serviceCount) + '</strong></div><div class="host-stat"><span>Protection</span><strong>' + esc(protection) + '</strong></div>' + diskMarkup + '</div><div class="host-last">Last report: ' + esc(timeAgo(host.last_seen)) + ' · Uptime: ' + esc(formatUptime(m.uptime_seconds)) + '</div></article>';
   }).join("") || '<div class="panel empty">No monitored hosts found. Check that the agent service is running.</div>';
 }
 function formatUptime(value) {
@@ -275,17 +281,50 @@ function renderNetwork() {
 function renderAntivirus() {
   $("antivirus-grid").innerHTML=hosts.map(host=>{
     const av=host.metrics?.antivirus||{};
-    const state=(v)=>v===true?'<span class="av-ok">Available</span>':v===false?'<span class="av-no">Not found</span>':'<span>Unknown</span>';
-    const daemon=av.clamav_daemon_active===true?'<span class="av-ok">Active</span>':av.clamav_daemon_active===false?'<span class="av-no">Inactive</span>':'<span>Unknown</span>';
-    return '<article class="host-card"><div class="host-card-head"><h3>'+esc(host.host_id)+'</h3><span class="status '+(isOnline(host.last_seen)?"online":"stale")+'">'+(isOnline(host.last_seen)?"Online":"Stale")+'</span></div><div class="av-item"><span>clamd</span>'+state(av.clamd)+'</div><div class="av-item"><span>clamscan</span>'+state(av.clamscan)+'</div><div class="av-item"><span>freshclam</span>'+state(av.freshclam)+'</div><div class="av-item"><span>ClamAV daemon</span>'+daemon+'</div></article>';
-  }).join("")||'<div class="panel empty">No antivirus telemetry available.</div>';
+    const defender=av.microsoft_defender;
+    const state=(v)=>v===true?'<span class="av-ok">Enabled</span>':v===false?'<span class="av-no">Disabled</span>':'<span>Unknown</span>';
+    let rows="";
+    if(defender){
+      rows='<div class="av-item"><span>Microsoft Defender</span>'+state(defender.available)+'</div>'+
+        '<div class="av-item"><span>Antivirus protection</span>'+state(defender.antivirus_enabled)+'</div>'+
+        '<div class="av-item"><span>Real-time protection</span>'+state(defender.real_time_protection_enabled)+'</div>'+
+        '<div class="av-item"><span>Signature updated</span><span>'+esc(defender.signature_last_updated||"Unknown")+'</span></div>';
+    } else {
+      const clamState=(v)=>v===true?'<span class="av-ok">Available</span>':v===false?'<span class="av-no">Not found</span>':'<span>Unknown</span>';
+      const daemon=av.clamav_daemon_active===true?'<span class="av-ok">Active</span>':av.clamav_daemon_active===false?'<span class="av-no">Inactive</span>':'<span>Unknown</span>';
+      rows='<div class="av-item"><span>clamd</span>'+clamState(av.clamd)+'</div><div class="av-item"><span>clamscan</span>'+clamState(av.clamscan)+'</div><div class="av-item"><span>freshclam</span>'+clamState(av.freshclam)+'</div><div class="av-item"><span>ClamAV daemon</span>'+daemon+'</div>';
+    }
+    const sec=host.metrics?.security_event_collection;
+    const audit=sec ? (sec.available===true?'<span class="av-ok">Available</span>':'<span class="av-no">Unavailable</span>') : '<span>Not reported</span>';
+    return '<article class="host-card"><div class="host-card-head"><h3>'+esc(host.host_id)+'</h3><span class="status '+(isOnline(host.last_seen)?"online":"stale")+'">'+(isOnline(host.last_seen)?"Online":"Stale")+'</span></div>'+rows+'<div class="av-item"><span>Security event collector</span>'+audit+'</div></article>';
+  }).join("")||'<div class="panel empty">No endpoint protection telemetry available.</div>';
+}
+function renderServices() {
+  const select=$("service-host");
+  if(!select)return;
+  const windows=hosts.filter(h=>Array.isArray(h.metrics?.services?.items));
+  const previous=select.value || selectedServiceHost;
+  select.innerHTML=windows.map(h=>'<option value="'+esc(h.host_id)+'">'+esc(h.host_id)+'</option>').join("");
+  if(windows.some(h=>h.host_id===previous))select.value=previous;
+  selectedServiceHost=select.value||"";
+  const host=windows.find(h=>h.host_id===selectedServiceHost);
+  const items=host?.metrics?.services?.items||[];
+  const query=($("service-search")?.value||"").toLowerCase();
+  const filtered=items.filter(s=>[s.name,s.display_name,s.status,s.start_type,s.username].join(" ").toLowerCase().includes(query));
+  $("service-subtitle").textContent=host ? (items.length+" services reported · "+timeAgo(host.last_seen)) : "No Windows service inventory is available yet.";
+  $("service-count").textContent=filtered.length+" services";
+  $("service-table").innerHTML=filtered.map(s=>{
+    const status=String(s.status||"unknown").toLowerCase();
+    const cls=status==="running"?"av-ok":status==="stopped"?"av-no":"";
+    return '<tr><td><strong>'+esc(s.name)+'</strong></td><td>'+esc(s.display_name)+'</td><td><span class="'+cls+'">'+esc(status)+'</span></td><td>'+esc(s.start_type)+'</td><td>'+esc(s.username)+'</td><td>'+esc(s.pid)+'</td></tr>';
+  }).join("")||'<tr><td colspan="6" class="empty">'+(host?"No services match this search.":"No Windows service telemetry received.")+'</td></tr>';
 }
 function switchView(name) {
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id==="view-"+name));
   document.querySelectorAll(".nav-link").forEach(v=>v.classList.toggle("active",v.dataset.view===name));
-  const titles={overview:"System overview",hosts:"Monitored hosts",disk:"Disk monitoring",events:"Security events",processes:"Running processes",network:"Network ports",antivirus:"Antivirus status"};
+  const titles={overview:"System overview",hosts:"Monitored hosts",disk:"Disk monitoring",events:"Security events",processes:"Running processes",network:"Network ports",antivirus:"Endpoint protection",services:"Windows services"};
   $("page-title").textContent=titles[name]||"System overview";
-  if(name==="processes")renderProcesses(); if(name==="network")renderNetwork(); if(name==="disk"){renderDiskMonitoring();loadDiskHistory();}
+  if(name==="processes")renderProcesses(); if(name==="network")renderNetwork(); if(name==="services")renderServices(); if(name==="disk"){renderDiskMonitoring();loadDiskHistory();}
 }
 async function refresh() {
   try {
@@ -293,7 +332,7 @@ async function refresh() {
     hosts=Array.isArray(hostData)?hostData:[];
     events=Array.isArray(eventData)?eventData:[];
     renderOverview(summaryData||{});
-    renderHosts(); renderEvents(); fillHostSelects(); renderProcesses(); renderNetwork(); renderAntivirus(); renderDiskMonitoring();
+    renderHosts(); renderEvents(); fillHostSelects(); renderProcesses(); renderNetwork(); renderAntivirus(); renderServices(); renderDiskMonitoring();
     const diskSelection=currentDiskSelection(), diskKey=diskSelection.hostId+"|"+diskSelection.mount;
     if(document.getElementById("view-disk").classList.contains("active") || diskKey!==lastDiskHistoryKey)loadDiskHistory();
     $("last-updated").textContent=new Date().toLocaleTimeString();
@@ -309,6 +348,8 @@ $("event-search").addEventListener("input",renderEvents);
 $("severity-filter").addEventListener("change",renderEvents);
 $("process-host").addEventListener("change",renderProcesses);
 $("network-host").addEventListener("change",renderNetwork);
+$("service-host").addEventListener("change",renderServices);
+$("service-search").addEventListener("input",renderServices);
 $("disk-host").addEventListener("change",()=>{renderDiskMonitoring();loadDiskHistory();});
 $("disk-mount").addEventListener("change",()=>{renderDiskMonitoring();loadDiskHistory();});
 $("disk-search").addEventListener("input",renderDiskMonitoring);
