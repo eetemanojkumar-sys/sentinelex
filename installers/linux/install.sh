@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO="https://github.com/eetemanojkumar-sys/sentinelex.git"
-BRANCH="dashboard-single-command-install"
+BRANCH="scale-1000-servers"
 INSTALL_DIR="/opt/sentinelx-agent"
 CONFIG_DIR="/etc/sentinelx-agent"
 SERVICE="sentinelx-agent"
@@ -60,7 +60,7 @@ umask 077
   printf 'SENTINELX_URL=%s\n' "$CENTRAL_URL"
   printf 'SENTINELX_AGENT_TOKEN=%s\n' "$AGENT_TOKEN"
   printf 'SENTINELX_HOST_ID=%s\n' "$(hostname)"
-  printf 'SENTINELX_INTERVAL=30\n'
+  printf 'SENTINELX_INTERVAL=60\n'
   [[ -z "$CA_LINE" ]] || printf '%s\n' "$CA_LINE"
 } > "$CONFIG_DIR/agent.env"
 unset AGENT_TOKEN
