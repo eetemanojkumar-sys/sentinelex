@@ -7,18 +7,18 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from collectors import linux
+from collectors import common, linux
 
 
 class LinuxCollectorTests(unittest.TestCase):
     @patch.object(linux, "antivirus_status", return_value={"clamd": False})
-    @patch.object(linux.psutil, "cpu_percent", return_value=3.5)
-    @patch.object(linux.psutil, "boot_time", return_value=1000.0)
-    @patch.object(linux.psutil, "virtual_memory")
-    @patch.object(linux.psutil, "disk_partitions", return_value=[])
-    @patch.object(linux.psutil, "process_iter", return_value=[])
-    @patch.object(linux.psutil, "net_connections", return_value=[])
-    @patch.object(linux.psutil, "sensors_temperatures", return_value={})
+    @patch.object(common.psutil, "cpu_percent", return_value=3.5)
+    @patch.object(common.psutil, "boot_time", return_value=1000.0)
+    @patch.object(common.psutil, "virtual_memory")
+    @patch.object(common.psutil, "disk_partitions", return_value=[])
+    @patch.object(common.psutil, "process_iter", return_value=[])
+    @patch.object(common.psutil, "net_connections", return_value=[])
+    @patch.object(common.psutil, "sensors_temperatures", return_value={})
     def test_preserves_legacy_metric_schema(
         self, _temps, _connections, _processes, _partitions, virtual_memory,
         _boot, _cpu, _antivirus
@@ -45,15 +45,15 @@ class LinuxCollectorTests(unittest.TestCase):
         fake_usage = SimpleNamespace(
             total=100, used=85, free=15, percent=85.0
         )
-        with patch.object(linux.psutil, "disk_partitions", return_value=[fake_partition]), \
-             patch.object(linux.psutil, "disk_usage", return_value=fake_usage), \
-             patch.object(linux.psutil, "process_iter", return_value=[]), \
-             patch.object(linux.psutil, "net_connections", return_value=[]), \
-             patch.object(linux.psutil, "sensors_temperatures", return_value={}), \
-             patch.object(linux.psutil, "virtual_memory",
+        with patch.object(common.psutil, "disk_partitions", return_value=[fake_partition]), \
+             patch.object(common.psutil, "disk_usage", return_value=fake_usage), \
+             patch.object(common.psutil, "process_iter", return_value=[]), \
+             patch.object(common.psutil, "net_connections", return_value=[]), \
+             patch.object(common.psutil, "sensors_temperatures", return_value={}), \
+             patch.object(common.psutil, "virtual_memory",
                           return_value=SimpleNamespace(total=100, available=50, percent=50)), \
-             patch.object(linux.psutil, "boot_time", return_value=1000.0), \
-             patch.object(linux.psutil, "cpu_percent", return_value=1.0), \
+             patch.object(common.psutil, "boot_time", return_value=1000.0), \
+             patch.object(common.psutil, "cpu_percent", return_value=1.0), \
              patch.object(linux, "antivirus_status", return_value={}):
             linux.collect_metrics(lambda *args: events.append(args), disk_state)
             linux.collect_metrics(lambda *args: events.append(args), disk_state)
