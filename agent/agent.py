@@ -6,6 +6,7 @@ import socket
 import tempfile
 import time
 import uuid
+import uuid
 from pathlib import Path
 from threading import Lock
 
@@ -177,7 +178,7 @@ def send_payload(metrics):
             payload = {
                 "schema_version": 1,
                 "host_id": HOST_ID,
-                "batch_id": __import__("uuid").uuid4().hex,
+                "batch_id": uuid.uuid4().hex,
                 "agent": {
                     "version": AGENT_VERSION,
                     "platform": platform.system(),
