@@ -195,12 +195,18 @@ app = FastAPI(
 )
 
 DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
+app.mount("/auth-ui", StaticFiles(directory=str(DASHBOARD_DIR.parent / "auth_ui"), html=True), name="auth-ui")
 app.mount("/dashboard", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="dashboard")
 
 
 @app.get("/", include_in_schema=False)
 def dashboard_home():
-    return RedirectResponse(url="/dashboard/")
+    return RedirectResponse(url="/login")
+
+
+@app.get("/login", include_in_schema=False)
+def login_page():
+    return RedirectResponse(url="/auth-ui/")
 
 
 class EventIn(BaseModel):
@@ -365,6 +371,16 @@ def auth_me(request: Request, db: Session = Depends(db_session)):
     }
 
 
+
+
+def tenant_data_not_ready():
+    """Fail closed until tenant_id migrations and ownership checks are deployed."""
+    raise HTTPException(
+        status_code=503,
+        detail="Customer data workspace is not enabled until tenant isolation migration is complete.",
+    )
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "sentinelx-central", "version": "0.2.0"}
@@ -425,7 +441,9 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
 
 
 @app.get("/api/v1/hosts")
-def hosts(db: Session = Depends(db_session)):
+# Fail closed: these legacy queries are not yet tenant-scoped.
+# The dependency intentionally blocks access until migration and isolation tests are complete.
+def hosts(_safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db_session)):
     snapshots = db.scalars(select(LatestMetrics).order_by(LatestMetrics.host_id)).all()
     registry = {row.host_id: row for row in db.scalars(select(Host)).all()}
     result = []
@@ -446,7 +464,9 @@ def hosts(db: Session = Depends(db_session)):
 
 
 @app.get("/api/v1/events")
-def events(limit: int = 100, db: Session = Depends(db_session)):
+# Fail closed: these legacy queries are not yet tenant-scoped.
+# The dependency intentionally blocks access until migration and isolation tests are complete.
+def events(limit: int = 100, _safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db_session)):
     limit = max(1, min(limit, 500))
     rows = db.scalars(
         select(SecurityEvent).order_by(desc(SecurityEvent.created_at)).limit(limit)
@@ -464,8 +484,10 @@ def events(limit: int = 100, db: Session = Depends(db_session)):
 
 
 @app.get("/api/v1/disk-history")
+# Fail closed: these legacy queries are not yet tenant-scoped.
+# The dependency intentionally blocks access until migration and isolation tests are complete.
 def disk_history(host_id: str, mountpoint: str, limit: int = 60,
-                 db: Session = Depends(db_session)):
+                 _safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db_session)):
     """Return recent stored disk-usage samples for one host and mount point."""
     limit = max(2, min(limit, 500))
     rows = db.scalars(
@@ -491,7 +513,9 @@ def disk_history(host_id: str, mountpoint: str, limit: int = 60,
 
 
 @app.get("/api/v1/summary")
-def summary(db: Session = Depends(db_session)):
+# Fail closed: these legacy queries are not yet tenant-scoped.
+# The dependency intentionally blocks access until migration and isolation tests are complete.
+def summary(_safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db_session)):
     latest_hosts = [{
         "host_id": row.host_id,
         "metrics": row.metrics,
@@ -515,8 +539,10 @@ def summary(db: Session = Depends(db_session)):
 
 
 @app.get("/api/v1/metrics/history")
+# Fail closed: these legacy queries are not yet tenant-scoped.
+# The dependency intentionally blocks access until migration and isolation tests are complete.
 def metrics_history(host_id: str, metric: str = "cpu", limit: int = 120,
-                    db: Session = Depends(db_session)):
+                    _safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db_session)):
     """Return bounded historical CPU, memory or network samples for one host."""
     if metric not in {"cpu", "memory", "network"}:
         raise HTTPException(status_code=400, detail="metric must be cpu, memory, or network")
