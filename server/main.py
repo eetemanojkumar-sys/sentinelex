@@ -87,8 +87,8 @@ class SecurityEvent(Base):
 Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="SentinelX Central API",
-    version="0.1.0",
-    description="Rule-based Linux health and security telemetry collector",
+    version="0.2.0",
+    description="Independent cross-platform infrastructure health and security telemetry platform",
 )
 
 DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
@@ -140,7 +140,7 @@ def verify_agent(token: str | None):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "sentinelx-central", "version": "0.1.0"}
+    return {"status": "ok", "service": "sentinelx-central", "version": "0.2.0"}
 
 
 @app.post("/api/v1/telemetry", status_code=202)
