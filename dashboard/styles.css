@@ -29,3 +29,24 @@
 
 /* Cross-platform host and Windows service inventory */
 .service-running{color:var(--green);font-weight:700}.service-stopped{color:var(--amber);font-weight:700}.host-platform{overflow-wrap:anywhere}.av-item span:last-child{overflow-wrap:anywhere;text-align:right}
+
+/* Individual server explorer and diagrammatic segment views */
+.server-toolbar{display:flex;align-items:end;gap:18px;flex-wrap:wrap;padding:15px 17px;background:var(--panel);border:1px solid var(--line);border-radius:12px;margin:16px 0}
+.server-toolbar label{display:grid;gap:7px;min-width:230px;color:var(--muted);font-size:9px;font-weight:800;letter-spacing:1px}
+.server-toolbar select{background:#14243a;border:1px solid #2a3b53;border-radius:8px;color:#e5efff;padding:11px;min-width:230px}
+.server-identity{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.server-identity strong{font-size:14px}.server-identity span:not(.status){color:var(--muted);font-size:11px}.server-updated{margin-left:auto;color:var(--muted);font-size:10px}
+.segment-tabs{display:flex;gap:7px;overflow-x:auto;padding:4px 0 13px;margin-bottom:5px}
+.segment-tab{white-space:nowrap;border:1px solid var(--line);background:var(--panel);color:var(--muted);padding:9px 13px;border-radius:8px;font:inherit;font-size:10px;font-weight:750;cursor:pointer}
+.segment-tab.active{background:#153c4a;border-color:#267e83;color:#80eee0}
+.server-detail-content{display:grid;gap:15px}.server-gauge-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px}
+.server-gauge-card,.server-kpi{min-height:130px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px;text-align:center}
+.server-gauge{width:92px;height:92px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--gauge-color) var(--gauge),#26374d 0);position:relative}
+.server-gauge:before{content:"";position:absolute;inset:8px;border-radius:50%;background:var(--panel)}
+.server-gauge>div{z-index:1;display:grid;gap:2px}.server-gauge strong{font-size:17px}.server-gauge small{font-size:9px;color:var(--muted)}
+.server-gauge-card>span,.server-kpi small{font-size:10px;color:var(--muted)}
+.server-kpi{align-items:flex-start;text-align:left;justify-content:center}.server-kpi span{font-size:10px;color:var(--muted)}.server-kpi strong{font-size:23px;line-height:1.2}
+.server-panel{min-width:0}.server-progress-row{display:grid;gap:7px;margin:13px 0}.server-progress-row>div:first-child,.volume-visual>div:first-child,.process-visual>div:first-child{display:flex;justify-content:space-between;gap:12px;font-size:10px}.server-progress-row span,.volume-visual small,.process-visual span{color:var(--muted)}
+.server-progress{height:9px;background:#26374d;border-radius:9px;overflow:hidden}.server-progress i{height:100%;display:block;border-radius:9px;background:linear-gradient(90deg,#39d4c5,#65a9ff)}.server-progress.warning i{background:#f5b95c}.server-progress.critical i{background:#ff737d}.server-progress.secondary i{background:#a78bfa}
+.volume-visual{padding:12px 0;border-bottom:1px solid var(--line)}.volume-visual small{display:block;margin-top:6px}.process-visual{padding:11px 0;border-bottom:1px solid var(--line)}.process-visual b{font-size:10px}
+.server-event{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);font-size:10px}.server-event>div{display:grid;gap:5px;min-width:0}.server-event small,.server-event time{color:var(--muted);font-size:9px;overflow-wrap:anywhere}.server-history-chart{width:100%;height:230px;display:block}.network-interface{padding:13px 0;border-bottom:1px solid var(--line)}.network-interface>div:first-child{display:flex;justify-content:space-between;gap:12px;font-size:10px}.network-interface span{color:var(--muted)}.network-bars{display:flex;gap:4px;margin-top:9px;height:9px;background:#26374d;border-radius:9px;overflow:hidden}.network-bars i:first-child{background:#39d4c5}.network-bars i:last-child{background:#a78bfa}
+@media(max-width:760px){.server-toolbar{align-items:stretch}.server-toolbar label,.server-toolbar select{width:100%;min-width:0}.server-updated{margin-left:0}.server-gauge-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.server-identity{align-items:flex-start;flex-direction:column}}
