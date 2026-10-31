@@ -1,201 +1,71 @@
 # SentinelX
 
-SentinelX is an independent, rule-based infrastructure health and security monitoring platform. It is being expanded from its initial Linux monitoring implementation into a centralized, cross-platform fleet product.
+SentinelX is an independent, rule-based infrastructure health and security monitoring platform for Linux and Windows endpoints. Agents report to a central FastAPI API backed by PostgreSQL. SentinelX owns collection, transport, storage, alert processing, and visualization; Prometheus, Node Exporter, Windows Exporter, and Grafana are not runtime dependencies.
 
-**Product direction:** SentinelX owns endpoint collection, telemetry transport, storage, alert processing, and its web dashboard. Prometheus, Node Exporter, Windows Exporter, and Grafana are not runtime dependencies. Endpoints push telemetry to the SentinelX central API; they do not expose exporter scrape ports.
+This integration work is isolated on `cross-platform-v1-conflict-resolution`. Production `main` remains untouched until release checks and explicit deployment approval. No Docker, Kubernetes, AI, or machine learning.
 
-The current development work is on `cross-platform-v1`. The running production deployment and `main` branch remain separate until release checks and explicit deployment approval. No Docker, Kubernetes, AI, or machine learning.
+## Current capabilities
 
-## Initial features
+- CPU, memory, swap, disk, uptime, process, and listening-port telemetry on Linux and Windows.
+- Linux file-change monitoring and ClamAV executable/daemon status.
+- Windows service inventory, Microsoft Defender status, and Security logon events (4624/4625).
+- Agent enrollment, per-agent credentials, revocation support, and administrator-protected read APIs.
+- SQLite-backed durable outbox with stable batch IDs and server-side idempotency.
+- Fleet dashboard with host inventory, resource/disk history, events, processes, ports, endpoint protection, and Windows services.
+- Default 30-second agent reporting interval; dashboard refreshes every 10 seconds.
+- Disk warning at 80% and critical at 90%.
 
-- CPU, memory, disk utilization and uptime collection
-- Interactive disk inventory with used/free/total capacity and mount-point selection
-- Disk usage history from stored telemetry, with warning at 80% and critical at 90%
-- Disk alert transition reporting to avoid repeating the same alert every collection cycle
-- New, modified, and deleted file event monitoring in configured directories
-- Detection and SHA-256 inventory of ML model file types (the files are identified only; they are never loaded or executed)
-- Running-process and listening-port inventory
-- Basic ClamAV executable and daemon status checks
-- Central FastAPI ingestion API and PostgreSQL persistence
-- SQLite-backed local telemetry outbox that retains the exact unacknowledged batch across agent restarts
-- Stable batch IDs and server-side idempotency to prevent duplicate metric/event writes after a lost response
-- Shared-token authentication for the initial single-host deployment
-
-## Independent monitoring architecture
-
-The target architecture, telemetry contract, data model, scale strategy, dashboard modules, security boundaries, and implementation phases are documented in [Independent Monitoring Architecture](docs/INDEPENDENT_MONITORING_ARCHITECTURE.md).
+These are monitoring indicators, not proof of compromise. SentinelX does not automatically terminate processes or remediate hosts.
 
 ## Architecture
 
 ```text
-Ubuntu EC2
-  |-- Python monitoring agent (systemd)
-  |     |-- psutil: CPU / RAM / disk / processes / ports
-  |     |-- watchdog: file changes
-  |     |-- hashlib: SHA-256
-  |     |-- ClamAV status check
-  |     |
-  |     +---- HTTPS / authenticated request ----+
-  |                                               |
-  |-- FastAPI service (systemd) <-----------------+
-        |
-        +-- PostgreSQL
-        +-- REST API for hosts, events and summary
-        +-- Nginx reverse proxy (deployment step)
+Linux agent ---------\
+                      \ HTTPS + per-agent credential
+Windows agent --------> TLS reverse proxy -> FastAPI -> PostgreSQL
+                      /                     |
+Additional agents ---/                      +-> Dashboard
 ```
 
-For phase 1, the agent and API can run on the same EC2 instance. The agent posts to localhost. Later, agents on more Linux servers can send telemetry to a dedicated central host.
+Bind the central API to localhost behind a TLS reverse proxy. The dashboard is served at `/dashboard/`.
 
-## Repository layout
+## Security configuration
 
-```text
-sentinelex/
-├── agent/
-│   ├── agent.py
-│   └── requirements.txt
-├── server/
-│   ├── __init__.py
-│   └── main.py
-├── deploy/
-│   ├── sentinelx-api.service
-│   └── sentinelx-agent.service
-├── .env.example
-├── .gitignore
-├── requirements.txt
-└── README.md
-```
+Set a long bootstrap secret in `SENTINELX_AGENT_TOKEN` and a separate `SENTINELX_ADMIN_TOKEN` for dashboard/read API access. The dashboard asks for the administrator token and retains it only in the current browser session.
 
-## Run on Ubuntu EC2 (without Docker)
+Keep PostgreSQL and Uvicorn private; expose only the TLS reverse proxy. Restrict ingress to trusted endpoint networks. The bootstrap token is a compatibility path for older agents; migrate endpoints to per-agent enrollment and rotate any exposed credentials.
 
-### 1. Install operating-system packages
+The enrolled agent credential is stored in a local state file; restrict its permissions/ACLs. The SQLite outbox defaults to `~/.sentinelx/outbox.sqlite3`; configure `SENTINELX_QUEUE_PATH` to use another protected location. It retains telemetry until acknowledgement.
 
-```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip postgresql postgresql-contrib clamav clamav-daemon
-```
+## Agent installation
 
-ClamAV is optional for the first run. Its presence and daemon status are reported; SentinelX does not claim that a malware scan has taken place.
+Review the maintained installers under `installers/linux/` and `installers/windows/` before use. They configure endpoint agents; they do not provision the central API, database, reverse proxy, or TLS configuration.
 
-### 2. Create the application account and directories
-
-```bash
-sudo useradd --system --create-home --home-dir /opt/sentinelx --shell /usr/sbin/nologin sentinelx
-sudo mkdir -p /opt/sentinelx
-sudo chown -R sentinelx:sentinelx /opt/sentinelx
-```
-
-Clone or copy this repository into `/opt/sentinelx`, then:
-
-```bash
-cd /opt/sentinelx
-sudo -u sentinelx python3 -m venv venv
-sudo -u sentinelx ./venv/bin/pip install -r requirements.txt
-sudo -u sentinelx ./venv/bin/pip install -r agent/requirements.txt
-```
-
-### 3. Configure environment
-
-Create an environment file outside the Git repository, for example `/etc/sentinelx/sentinelx.env`:
-
-```bash
-sudo install -d -m 0750 -o root -g sentinelx /etc/sentinelx
-sudo sh -c 'umask 027; cat > /etc/sentinelx/sentinelx.env' <<'EOF'
-SENTINELX_AGENT_TOKEN=REPLACE_WITH_A_LONG_RANDOM_SECRET
-DATABASE_URL=postgresql+psycopg://sentinelx:REPLACE_DB_PASSWORD@127.0.0.1:5432/sentinelx
-SENTINELX_URL=http://127.0.0.1:8000
-SENTINELX_HOST_ID=ec2-ubuntu
-SENTINELX_INTERVAL=30
-SENTINELX_WATCH_PATHS=/etc,/opt,/var/www,/home
-EOF
-sudo chown root:sentinelx /etc/sentinelx/sentinelx.env
-sudo chmod 0640 /etc/sentinelx/sentinelx.env
-```
-
-Generate secrets yourself; never commit real credentials. Configure PostgreSQL role/database to match the DSN above. The agent's durable outbox defaults to `~/.sentinelx/outbox.sqlite3`; set `SENTINELX_QUEUE_PATH` to choose another protected local path. The outbox contains collected telemetry until the central API acknowledges it, so protect it with OS file permissions. Example:
-
-```bash
-sudo -u postgres psql
-```
-
-Inside psql, replace the password placeholder with a strong password:
-
-```sql
-CREATE ROLE sentinelx LOGIN PASSWORD 'REPLACE_DB_PASSWORD';
-CREATE DATABASE sentinelx OWNER sentinelx;
-\q
-```
-
-### 4. Configure services
-
-Review the service files in `deploy/`, then install them:
-
-```bash
-sudo cp deploy/sentinelx-api.service /etc/systemd/system/
-sudo cp deploy/sentinelx-agent.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now sentinelx-api sentinelx-agent
-sudo systemctl status sentinelx-api sentinelx-agent
-```
-
-### 5. Verify
-
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/api/v1/hosts
-curl http://127.0.0.1:8000/api/v1/events
-curl http://127.0.0.1:8000/api/v1/summary
-```
-
-API documentation is available at `http://127.0.0.1:8000/docs` locally.
+For private TLS, configure the public CA/server certificate only. Never distribute a TLS private key.
 
 ## API endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/health` | API health |
-| POST | `/api/v1/telemetry` | Authenticated agent telemetry ingestion |
-| GET | `/api/v1/hosts` | Latest metrics per host |
-| GET | `/api/v1/events` | Recent events |
-| GET | `/api/v1/summary` | Fleet summary |
-| GET | `/api/v1/disk-history?host_id=...&mountpoint=...&limit=120` | Recent stored disk usage samples for one volume |
+| GET | `/health` | API and database health |
+| POST | `/api/v1/agents/enroll` | Enroll endpoint with bootstrap token |
+| POST | `/api/v1/telemetry` | Authenticated, idempotent telemetry ingestion |
+| GET | `/api/v1/hosts` | Latest hosts (administrator auth, paginated) |
+| GET | `/api/v1/events` | Recent events (administrator auth) |
+| GET | `/api/v1/summary` | Fleet summary (administrator auth) |
+| GET | `/api/v1/disk-history` | Disk samples (administrator auth) |
+| GET | `/api/v1/metrics/history` | CPU, memory, and network history (administrator auth) |
 
-## Detection rules
+## Operational notes
 
-| Signal | Initial rule |
-|---|---|
-| Disk usage | Warning >= 80%; critical >= 90% |
-| New file | Record event under watched paths |
-| Modified model file | Record event and SHA-256 digest |
-| ClamAV daemon | Report active/inactive/unknown |
-| Process inventory | Report sampled process information |
-| Listening ports | Report current listening sockets |
-
-These are monitoring indicators, not proof of compromise. The first implementation has no automatic remediation or process termination.
-
-## Security and limitations
-
-- Keep the API bound to localhost until a TLS reverse proxy and firewall policy are configured.
-- Use a long, unique agent token; rotate it if exposed. The first version uses one shared token, suitable only for controlled single-host testing.
-- The local SQLite outbox retains one exact batch until acknowledgement; the server records batch IDs for idempotent ingestion. This is a reliability foundation, not yet a bounded multi-batch spool or per-host credential enrollment system.
-- Avoid watching pseudo-filesystems such as `/proc`, `/sys`, and `/dev`; do not watch high-churn or huge trees without tuning.
-- File events can be missed during downtime or when Linux inotify limits are reached. A later integrity-baseline scan can complement event watching.
-- Some process, port, and system data require elevated permissions. Run with the least privileges that meet the monitoring requirements.
-- The initial ClamAV check checks binary presence and daemon state; it does not inspect detection signatures, real-time protection configuration, or scan results.
-- Login auditing, account/privilege change detection, package change monitoring, per-agent credentials, alert notifications, retention policies, and the web dashboard are planned work.
+- `create_all` adds missing tables but does not migrate existing production tables. Plan and verify schema migrations before deploying.
+- Run collectors with least privilege; some process/port data requires elevated permissions.
+- File-event monitoring can miss changes during downtime or when OS watcher limits are reached. Complement it with periodic integrity baselines.
+- Defender/ClamAV values are status checks, not proof a malware scan has completed.
+- Historical metrics are persisted at a lower cadence to limit database writes.
 
 ## Development principles
 
-Python + Linux native services. No Docker. No AI/ML. No Kubernetes. Rules and transparent threshold/event logic only.
+Python, FastAPI, PostgreSQL, native OS services, and transparent rule-based logic. No Docker, AI/ML, Kubernetes, or predictive analytics.
 
-
-## Web dashboard
-
-The built-in dark-mode dashboard is served by FastAPI from the `dashboard/` directory.
-
-- Dashboard: `http://127.0.0.1:8000/dashboard/`
-- Root URL redirects to the dashboard: `http://127.0.0.1:8000/`
-- API documentation: `http://127.0.0.1:8000/docs`
-
-The dashboard refreshes telemetry every 10 seconds and displays host health, CPU, memory, recent events, process inventory, listening ports, and ClamAV status. Its Disk monitoring view supports host and mount-point selection, searchable/sortable filesystem inventory, capacity breakdowns, rule-based health states, and a historical usage chart backed by stored telemetry. It uses the existing read-only GET endpoints and does not need a separate frontend build tool.
-
-Keep the API bound to `127.0.0.1` and access it through an SSH tunnel until a TLS reverse proxy and appropriate access controls are configured.
+See [Independent Monitoring Architecture](docs/INDEPENDENT_MONITORING_ARCHITECTURE.md) for component boundaries, data model, security design, scale strategy, and roadmap.
