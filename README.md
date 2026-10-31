@@ -69,3 +69,51 @@ For private TLS, configure the public CA/server certificate only. Never distribu
 Python, FastAPI, PostgreSQL, native OS services, and transparent rule-based logic. No Docker, AI/ML, Kubernetes, or predictive analytics.
 
 See [Independent Monitoring Architecture](docs/INDEPENDENT_MONITORING_ARCHITECTURE.md) for component boundaries, data model, security design, scale strategy, and roadmap.
+
+
+## Automated deployment
+
+The deployment branch includes a safe installer for a fresh Ubuntu/Debian central server and a separate Windows endpoint installer.
+
+### Ubuntu central server and local Linux agent
+
+Review the script, then run it from the repository root:
+
+```bash
+sudo bash deploy/install.sh
+```
+
+The installer:
+- Checks the OS and required tools.
+- Creates a recovery archive before modifying an existing installation.
+- Backs up PostgreSQL using `pg_dump` when a PostgreSQL URL is configured; it stops if that database backup fails.
+- Preserves `/etc/sentinelx/sentinelx.env`, existing agent identity, outbox and database contents.
+- Generates first-run agent/admin credentials only on a genuinely fresh installation.
+- Installs pinned Python dependencies and systemd units.
+- Starts the central API and (unless skipped) the Linux agent, then checks `/health`.
+
+Modes:
+
+```bash
+sudo bash deploy/install.sh --mode backup
+sudo bash deploy/install.sh --mode update
+sudo bash deploy/install.sh --mode repair
+sudo bash deploy/install.sh --mode install --skip-agent
+```
+
+Backups are written to `/var/backups/sentinelx`. The installer keeps the API bound to `127.0.0.1`; configure a TLS reverse proxy and restrictive security-group/firewall rules for remote access. It does not open public ports.
+
+### Windows endpoint
+
+Run PowerShell as Administrator on each Windows endpoint:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\deploy\install-windows-agent.ps1 -CentralUrl "https://YOUR-SENTINELX-HOST"
+```
+
+The script securely prompts for the bootstrap token if it is not supplied as a parameter, installs Python if required, installs the agent dependencies, protects its configuration under ProgramData, and registers a startup scheduled task running as SYSTEM. The first run enrolls the endpoint and stores its per-agent credential locally.
+
+Use HTTPS for remote Windows endpoints. The bootstrap token is a provisioning secret; do not paste it into tickets, chat, or source control.
+
+**Important:** This installer is a deployment foundation, not a claim that every future SentinelX capability is already implemented. It installs the current repository release and verifies the API/agent processes; it does not install Prometheus, Node Exporter, Windows Exporter, or Grafana.
