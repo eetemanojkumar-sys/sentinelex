@@ -36,9 +36,14 @@ chmod 0750 "$CONFIG_DIR"; chmod 0700 "$STATE_DIR"
 backup_existing() {
   STAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
   ARCHIVE="$BACKUP_ROOT/sentinelx-files-$STAMP.tar.gz"
-  tar -czf "$ARCHIVE" -C / \
+  tar --ignore-failed-read --xattrs --acls -czf "$ARCHIVE" -C / \
     --exclude=opt/sentinelx/venv --exclude=opt/sentinelx/.git \
-    opt/sentinelx etc/sentinelx var/lib/SentinelX 2>/dev/null || {
+    opt/sentinelx etc/sentinelx etc/nginx \
+    etc/systemd/system/sentinelx-api.service \
+    etc/systemd/system/sentinelx-agent.service \
+    etc/systemd/system/sentinelx-retention.service \
+    etc/systemd/system/sentinelx-retention.timer \
+    var/lib/SentinelX 2>/dev/null || {
       rm -f "$ARCHIVE"
       die "File backup failed; stopping before changes."
     }
@@ -151,6 +156,8 @@ ensure_setting SENTINELX_INTERVAL "30"
 ensure_setting SENTINELX_WATCH_PATHS "/etc,/opt,/var/www,/home"
 ensure_setting SENTINELX_STATE_FILE "$STATE_DIR/agent.json"
 ensure_setting SENTINELX_QUEUE_PATH "$STATE_DIR/outbox.sqlite3"
+ensure_setting SENTINELX_TELEMETRY_RETENTION_DAYS "30"
+ensure_setting SENTINELX_EVENT_RETENTION_DAYS "180"
 chown root:sentinelx "$ENV_FILE"; chmod 0640 "$ENV_FILE"
 chown -R sentinelx:sentinelx "$APP_DIR"; chmod 0750 "$APP_DIR"
 chown root:root "$CONFIG_DIR"; chmod 0750 "$CONFIG_DIR"
@@ -167,8 +174,11 @@ fi
 log "Installing systemd services."
 install -m 0644 "$APP_DIR/deploy/sentinelx-api.service" /etc/systemd/system/sentinelx-api.service
 if [ "$SKIP_AGENT" -eq 0 ]; then install -m 0644 "$APP_DIR/deploy/sentinelx-agent.service" /etc/systemd/system/sentinelx-agent.service; fi
+install -m 0644 "$APP_DIR/deploy/sentinelx-retention.service" /etc/systemd/system/sentinelx-retention.service
+install -m 0644 "$APP_DIR/deploy/sentinelx-retention.timer" /etc/systemd/system/sentinelx-retention.timer
 systemctl daemon-reload
 systemctl enable sentinelx-api
+systemctl enable --now sentinelx-retention.timer
 if [ "$SKIP_AGENT" -eq 0 ]; then systemctl enable sentinelx-agent; fi
 systemctl restart sentinelx-api
 if [ "$SKIP_AGENT" -eq 0 ]; then systemctl restart sentinelx-agent; fi
