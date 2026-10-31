@@ -19,6 +19,7 @@
       <nav class="nav">
         <a class="nav-link active" href="#overview" data-view="overview"><span>▦</span> Overview</a>
         <a class="nav-link" href="#hosts" data-view="hosts"><span>▣</span> Hosts</a>
+        <a class="nav-link" href="#server" data-view="server"><span>◈</span> Server explorer</a>
         <a class="nav-link" href="#disk" data-view="disk"><span>◫</span> Disk monitoring</a>
         <a class="nav-link" href="#services" data-view="services"><span>⚙</span> Windows services</a>
         <a class="nav-link" href="#events" data-view="events"><span>◉</span> Security events <b id="nav-event-count">—</b></a>
@@ -77,6 +78,27 @@
       </section>
 
       <section class="view" id="view-services"><div class="section-intro"><h2>Windows services</h2><p>Service state, startup mode and service account reported by Windows agents.</p></div><div class="toolbar"><select id="service-host" aria-label="Select Windows host"></select><input id="service-search" type="search" placeholder="Search service name or display name…" aria-label="Search services"></div><article class="panel"><div class="panel-head"><div><h3>Service inventory</h3><p id="service-subtitle">Select a Windows host to inspect its service snapshot.</p></div><span class="table-count" id="service-count">—</span></div><div class="table-wrap"><table><thead><tr><th>SERVICE</th><th>DISPLAY NAME</th><th>STATUS</th><th>START TYPE</th><th>ACCOUNT</th><th>PID</th></tr></thead><tbody id="service-table"><tr><td colspan="6" class="empty">Waiting for Windows service telemetry…</td></tr></tbody></table></div></article></section>
+
+
+      <section class="view" id="view-server">
+        <div class="section-intro"><h2>Individual server explorer</h2><p>Select a machine, then drill into each monitoring segment. Every panel is built from that server's latest telemetry.</p></div>
+        <div class="server-toolbar">
+          <label>SELECT SERVER<select id="server-detail-host" aria-label="Select server for detailed view"></select></label>
+          <div class="server-identity" id="server-identity">Waiting for host telemetry…</div>
+          <span class="server-updated" id="server-last-seen">—</span>
+        </div>
+        <nav class="segment-tabs" id="server-segment-tabs" aria-label="Server monitoring segments">
+          <button class="segment-tab active" data-server-segment="overview" type="button">Overview</button>
+          <button class="segment-tab" data-server-segment="compute" type="button">CPU &amp; memory</button>
+          <button class="segment-tab" data-server-segment="storage" type="button">Storage</button>
+          <button class="segment-tab" data-server-segment="network" type="button">Network</button>
+          <button class="segment-tab" data-server-segment="processes" type="button">Processes</button>
+          <button class="segment-tab" data-server-segment="services" type="button">Services</button>
+          <button class="segment-tab" data-server-segment="security" type="button">Security</button>
+          <button class="segment-tab" data-server-segment="protection" type="button">Protection</button>
+        </nav>
+        <div id="server-detail-content" class="server-detail-content"><div class="panel empty">Select a server to inspect its telemetry.</div></div>
+      </section>
 
       <section class="view" id="view-hosts"><div class="section-intro"><h2>Monitored hosts</h2><p>Host availability and latest system resource readings. Browse the fleet in pages.</p></div><div class="toolbar"><input id="host-search" type="search" placeholder="Search hostname…" aria-label="Search monitored hosts"><span id="host-page-label" class="table-count">Loading hosts…</span><button id="host-prev" type="button" class="refresh-btn" disabled>Previous</button><button id="host-next" type="button" class="refresh-btn" disabled>Next</button></div><div id="hosts-grid" class="hosts-grid"><div class="panel empty">Loading hosts…</div></div></section>
 
