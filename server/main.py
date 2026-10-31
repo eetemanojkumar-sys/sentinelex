@@ -145,6 +145,34 @@ def events(limit: int = 100, db: Session = Depends(db_session)):
     } for row in rows]
 
 
+
+@app.get("/api/v1/disk-history")
+def disk_history(host_id: str, mountpoint: str, limit: int = 60,
+                 db: Session = Depends(db_session)):
+    """Return recent stored disk-usage samples for one host and mount point."""
+    limit = max(2, min(limit, 500))
+    rows = db.scalars(
+        select(Telemetry)
+        .where(Telemetry.host_id == host_id)
+        .order_by(desc(Telemetry.received_at))
+        .limit(limit)
+    ).all()
+    samples = []
+    for row in reversed(rows):
+        disk_data = (row.metrics or {}).get("disk", {})
+        volume = disk_data.get(mountpoint) if isinstance(disk_data, dict) else None
+        if not isinstance(volume, dict) or volume.get("percent") is None:
+            continue
+        samples.append({
+            "recorded_at": row.received_at,
+            "percent": volume.get("percent"),
+            "total_bytes": volume.get("total_bytes"),
+            "used_bytes": volume.get("used_bytes"),
+            "free_bytes": volume.get("free_bytes"),
+        })
+    return {"host_id": host_id, "mountpoint": mountpoint, "samples": samples}
+
+
 @app.get("/api/v1/summary")
 def summary(db: Session = Depends(db_session)):
     host_rows = db.scalars(select(Telemetry).order_by(desc(Telemetry.received_at))).all()
