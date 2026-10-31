@@ -18,7 +18,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.sql import over
 
-BOOTSTRAP_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")\nADMIN_TOKEN = os.getenv("SENTINELX_ADMIN_TOKEN", "")\nHISTORY_INTERVAL_SECONDS = max(60, int(os.getenv("SENTINELX_HISTORY_INTERVAL_SECONDS", "300")))
+BOOTSTRAP_TOKEN = os.getenv("SENTINELX_ENROLLMENT_TOKEN") or os.getenv("SENTINELX_AGENT_TOKEN", "")
+ALLOW_LEGACY_TOKEN = os.getenv("SENTINELX_ALLOW_LEGACY_TOKEN", "true").lower() in {"1", "true", "yes"}\nADMIN_TOKEN = os.getenv("SENTINELX_ADMIN_TOKEN", "")\nHISTORY_INTERVAL_SECONDS = max(60, int(os.getenv("SENTINELX_HISTORY_INTERVAL_SECONDS", "300")))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sentinelx.db")
 if not BOOTSTRAP_TOKEN:
     raise RuntimeError("SENTINELX_AGENT_TOKEN must be configured")
@@ -86,7 +87,18 @@ class SecurityEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
-Base.metadata.create_all(bind=engine)
+if is_sqlite:
+    Base.metadata.create_all(bind=engine)
+else:
+    # Prevent concurrent Uvicorn workers racing during first-start schema creation.
+    with engine.connect() as schema_connection:
+        schema_connection.execute(text("SELECT pg_advisory_lock(731904211)"))
+        schema_connection.commit()
+        try:
+            Base.metadata.create_all(bind=schema_connection)
+        finally:
+            schema_connection.execute(text("SELECT pg_advisory_unlock(731904211)"))
+            schema_connection.commit()
 
 app = FastAPI(
     title="SentinelX Central API",
@@ -144,7 +156,7 @@ def authenticate_agent(token: str | None, db: Session):
             raise HTTPException(status_code=401, detail="Agent credential revoked")
         return credential
     # Temporary compatibility for agents not yet upgraded to per-agent enrollment.
-    if secrets.compare_digest(token, BOOTSTRAP_TOKEN):
+    if ALLOW_LEGACY_TOKEN and secrets.compare_digest(token, BOOTSTRAP_TOKEN):
         return None
     raise HTTPException(status_code=401, detail="Invalid agent token")
 
@@ -169,7 +181,8 @@ def enroll(payload: EnrollmentIn, x_agent_token: str | None = Header(default=Non
         raise HTTPException(status_code=401, detail="Invalid enrollment token")
 
     # A machine ID is stable on that endpoint. Re-enrollment rotates its token.
-    host_id = f"{payload.hostname}-{hashlib.sha256(payload.machine_id.encode()).hexdigest()[:12]}"
+    safe_hostname = payload.hostname[:240]
+    host_id = f"{safe_hostname}-{hashlib.sha256(payload.machine_id.encode()).hexdigest()[:12]}"
     existing = db.scalar(select(AgentCredential).where(AgentCredential.host_id == host_id))
     raw_token = secrets.token_urlsafe(48)
     if existing:
@@ -222,7 +235,13 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
         select(func.max(Telemetry.received_at)).where(Telemetry.host_id == payload.host_id)
     )
     if last_history is not None and last_history.tzinfo is None:\n        last_history = last_history.replace(tzinfo=timezone.utc)\n    if last_history is None or (now - last_history).total_seconds() >= HISTORY_INTERVAL_SECONDS:
-        db.add(Telemetry(host_id=payload.host_id, received_at=now, metrics=payload.metrics))
+        history_metrics = {
+            key: payload.metrics[key]
+            for key in ("hostname", "platform", "os", "uptime_seconds", "boot_time",
+                        "cpu_percent", "cpu_count_logical", "memory", "swap", "disk")
+            if key in payload.metrics
+        }
+        db.add(Telemetry(host_id=payload.host_id, received_at=now, metrics=history_metrics))
 
     if payload.events:
         db.add_all([
