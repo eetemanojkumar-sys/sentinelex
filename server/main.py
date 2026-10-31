@@ -1,12 +1,10 @@
 """SentinelX central telemetry API (rule-based; no AI/ML)."""
 import os
-import re
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -14,7 +12,6 @@ from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, create
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from server.security import generate_secret, hash_password, hash_secret, verify_password
 
 TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sentinelx.db")
@@ -28,105 +25,6 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 class Base(DeclarativeBase):
     pass
-
-
-class Tenant(Base):
-    """Customer organization. Tenant-owned records must be scoped to this ID."""
-    __tablename__ = "tenants"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
-    )
-
-
-class User(Base):
-    """Platform identity. Passwords are stored only as salted password hashes."""
-    __tablename__ = "users"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
-    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-
-
-class TenantMembership(Base):
-    """A user's role inside one organization; users may belong to multiple tenants."""
-    __tablename__ = "tenant_memberships"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "user_id", name="uq_tenant_membership_user"),
-    )
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
-    user_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
-    role: Mapped[str] = mapped_column(String(20), default="viewer", nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-
-
-class UserSession(Base):
-    """Opaque browser session; only a SHA-256 token digest is persisted."""
-    __tablename__ = "user_sessions"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-
-
-class EnrollmentToken(Base):
-    """Single-use, expiring organization enrollment token; persist only its hash."""
-    __tablename__ = "enrollment_tokens"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
-    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_by: Mapped[str] = mapped_column(String(36), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-
-
-class AgentCredential(Base):
-    """Per-host agent credential metadata; never store the plaintext credential."""
-    __tablename__ = "agent_credentials"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
-    host_id: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
-    issued_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class AuditEvent(Base):
-    """Tenant-scoped audit trail for security-sensitive actions."""
-    __tablename__ = "audit_events"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
-    actor_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    action: Mapped[str] = mapped_column(String(100), nullable=False)
-    resource_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    resource_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
-    )
 
 
 class Telemetry(Base):
@@ -195,18 +93,12 @@ app = FastAPI(
 )
 
 DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
-app.mount("/auth-ui", StaticFiles(directory=str(DASHBOARD_DIR.parent / "auth_ui"), html=True), name="auth-ui")
 app.mount("/dashboard", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="dashboard")
 
 
 @app.get("/", include_in_schema=False)
 def dashboard_home():
-    return RedirectResponse(url="/login")
-
-
-@app.get("/login", include_in_schema=False)
-def login_page():
-    return RedirectResponse(url="/auth-ui/")
+    return RedirectResponse(url="/dashboard/")
 
 
 class EventIn(BaseModel):
@@ -245,140 +137,6 @@ def db_session():
 def verify_agent(token: str | None):
     if not token or token != TOKEN:
         raise HTTPException(status_code=401, detail="Invalid agent token")
-
-
-class RegisterIn(BaseModel):
-    email: str = Field(min_length=5, max_length=320)
-    password: str = Field(min_length=12, max_length=1024)
-    organization_name: str = Field(min_length=2, max_length=200)
-
-
-class LoginIn(BaseModel):
-    email: str = Field(min_length=5, max_length=320)
-    password: str = Field(min_length=1, max_length=1024)
-
-
-SESSION_COOKIE = "sentinelx_session"
-SESSION_HOURS = max(1, min(int(os.getenv("SENTINELX_SESSION_HOURS", "12")), 168))
-COOKIE_SECURE = os.getenv("SENTINELX_COOKIE_SECURE", "true").lower() == "true"
-
-
-def _new_session(db: Session, user_id: str, response: Response):
-    raw = generate_secret()
-    row = UserSession(
-        id=str(uuid.uuid4()), user_id=user_id, token_hash=hash_secret(raw),
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS),
-    )
-    db.add(row)
-    db.commit()
-    response.set_cookie(
-        SESSION_COOKIE, raw, httponly=True, secure=COOKIE_SECURE,
-        samesite="strict", max_age=SESSION_HOURS * 3600, path="/",
-    )
-
-
-def _current_user(request: Request, db: Session):
-    raw = request.cookies.get(SESSION_COOKIE)
-    if not raw:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    row = db.scalar(select(UserSession).where(
-        UserSession.token_hash == hash_secret(raw),
-        UserSession.revoked_at.is_(None),
-        UserSession.expires_at > datetime.now(timezone.utc),
-    ))
-    if row is None:
-        raise HTTPException(status_code=401, detail="Session expired or invalid")
-    user = db.get(User, row.user_id)
-    if user is None or user.status != "active":
-        raise HTTPException(status_code=401, detail="User is inactive")
-    return user
-
-
-@app.post("/api/v1/auth/register", status_code=201)
-def register(payload: RegisterIn, response: Response, db: Session = Depends(db_session)):
-    email = payload.email.strip().lower()
-    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
-        raise HTTPException(status_code=422, detail="Enter a valid email address")
-    if db.scalar(select(User).where(User.email == email)):
-        raise HTTPException(status_code=409, detail="An account with this email already exists")
-    base = re.sub(r"[^a-z0-9]+", "-", payload.organization_name.lower()).strip("-")[:60] or "company"
-    slug = base
-    suffix = 2
-    while db.scalar(select(Tenant).where(Tenant.slug == slug)):
-        slug = f"{base[:70]}-{suffix}"
-        suffix += 1
-    tenant_id, user_id = str(uuid.uuid4()), str(uuid.uuid4())
-    user = User(
-        id=user_id, email=email, password_hash=hash_password(payload.password),
-        status="active",
-    )
-    tenant = Tenant(id=tenant_id, name=payload.organization_name.strip(), slug=slug)
-    membership = TenantMembership(
-        id=str(uuid.uuid4()), tenant_id=tenant_id, user_id=user_id,
-        role="owner", status="active",
-    )
-    db.add_all([user, tenant, membership])
-    try:
-        db.flush()
-        _new_session(db, user_id, response)
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="Account or organization already exists")
-    return {"user": {"id": user_id, "email": email},
-            "tenant": {"id": tenant_id, "name": tenant.name, "slug": slug},
-            "role": "owner", "email_verification": "not_configured"}
-
-
-@app.post("/api/v1/auth/login")
-def login(payload: LoginIn, response: Response, db: Session = Depends(db_session)):
-    email = payload.email.strip().lower()
-    user = db.scalar(select(User).where(User.email == email))
-    if user is None or user.status != "active" or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    _new_session(db, user.id, response)
-    return {"authenticated": True, "user": {"id": user.id, "email": user.email}}
-
-
-@app.post("/api/v1/auth/logout")
-def logout(request: Request, response: Response, db: Session = Depends(db_session)):
-    raw = request.cookies.get(SESSION_COOKIE)
-    if raw:
-        row = db.scalar(select(UserSession).where(UserSession.token_hash == hash_secret(raw)))
-        if row and row.revoked_at is None:
-            row.revoked_at = datetime.now(timezone.utc)
-            db.commit()
-    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True,
-                           secure=COOKIE_SECURE, samesite="strict")
-    return {"authenticated": False}
-
-
-@app.get("/api/v1/auth/me")
-def auth_me(request: Request, db: Session = Depends(db_session)):
-    user = _current_user(request, db)
-    memberships = db.scalars(select(TenantMembership).where(
-        TenantMembership.user_id == user.id, TenantMembership.status == "active"
-    )).all()
-    tenant_ids = [m.tenant_id for m in memberships]
-    tenants = db.scalars(select(Tenant).where(Tenant.id.in_(tenant_ids))).all() if tenant_ids else []
-    tenant_map = {t.id: t for t in tenants}
-    return {
-        "user": {"id": user.id, "email": user.email},
-        "organizations": [
-            {"id": m.tenant_id, "name": tenant_map[m.tenant_id].name,
-             "slug": tenant_map[m.tenant_id].slug, "role": m.role}
-            for m in memberships if m.tenant_id in tenant_map
-        ],
-    }
-
-
-
-
-def tenant_data_not_ready():
-    """Fail closed until tenant_id migrations and ownership checks are deployed."""
-    raise HTTPException(
-        status_code=503,
-        detail="Customer data workspace is not enabled until tenant isolation migration is complete.",
-    )
 
 
 @app.get("/health")
@@ -441,9 +199,7 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
 
 
 @app.get("/api/v1/hosts")
-# Fail closed: these legacy queries are not yet tenant-scoped.
-# The dependency intentionally blocks access until migration and isolation tests are complete.
-def hosts(_safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db_session)):
+def hosts(db: Session = Depends(db_session)):
     snapshots = db.scalars(select(LatestMetrics).order_by(LatestMetrics.host_id)).all()
     registry = {row.host_id: row for row in db.scalars(select(Host)).all()}
     result = []
@@ -466,7 +222,7 @@ def hosts(_safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db
 @app.get("/api/v1/events")
 # Fail closed: these legacy queries are not yet tenant-scoped.
 # The dependency intentionally blocks access until migration and isolation tests are complete.
-def events(limit: int = 100, _safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db_session)):
+def events(limit: int = 100, db: Session = Depends(db_session)):
     limit = max(1, min(limit, 500))
     rows = db.scalars(
         select(SecurityEvent).order_by(desc(SecurityEvent.created_at)).limit(limit)
@@ -487,7 +243,7 @@ def events(limit: int = 100, _safe: None = Depends(tenant_data_not_ready), db: S
 # Fail closed: these legacy queries are not yet tenant-scoped.
 # The dependency intentionally blocks access until migration and isolation tests are complete.
 def disk_history(host_id: str, mountpoint: str, limit: int = 60,
-                 _safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db_session)):
+                 db: Session = Depends(db_session)):
     """Return recent stored disk-usage samples for one host and mount point."""
     limit = max(2, min(limit, 500))
     rows = db.scalars(
@@ -515,7 +271,7 @@ def disk_history(host_id: str, mountpoint: str, limit: int = 60,
 @app.get("/api/v1/summary")
 # Fail closed: these legacy queries are not yet tenant-scoped.
 # The dependency intentionally blocks access until migration and isolation tests are complete.
-def summary(_safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db_session)):
+def summary(db: Session = Depends(db_session)):
     latest_hosts = [{
         "host_id": row.host_id,
         "metrics": row.metrics,
@@ -542,7 +298,7 @@ def summary(_safe: None = Depends(tenant_data_not_ready), db: Session = Depends(
 # Fail closed: these legacy queries are not yet tenant-scoped.
 # The dependency intentionally blocks access until migration and isolation tests are complete.
 def metrics_history(host_id: str, metric: str = "cpu", limit: int = 120,
-                    _safe: None = Depends(tenant_data_not_ready), db: Session = Depends(db_session)):
+                    db: Session = Depends(db_session)):
     """Return bounded historical CPU, memory or network samples for one host."""
     if metric not in {"cpu", "memory", "network"}:
         raise HTTPException(status_code=400, detail="metric must be cpu, memory, or network")
