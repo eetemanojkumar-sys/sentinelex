@@ -234,7 +234,9 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
     last_history = db.scalar(
         select(func.max(Telemetry.received_at)).where(Telemetry.host_id == payload.host_id)
     )
-    if last_history is not None and last_history.tzinfo is None:\n        last_history = last_history.replace(tzinfo=timezone.utc)\n    if last_history is None or (now - last_history).total_seconds() >= HISTORY_INTERVAL_SECONDS:
+    if last_history is not None and last_history.tzinfo is None:
+        last_history = last_history.replace(tzinfo=timezone.utc)
+    if last_history is None or (now - last_history).total_seconds() >= HISTORY_INTERVAL_SECONDS:
         history_metrics = {
             key: payload.metrics[key]
             for key in ("hostname", "platform", "os", "uptime_seconds", "boot_time",
