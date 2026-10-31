@@ -30,7 +30,7 @@ command -v apt-get >/dev/null || { echo "Ubuntu/Debian required."; exit 1; }
 command -v systemctl >/dev/null || { echo "systemd required."; exit 1; }
 log(){ printf '\n[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ echo "ERROR: $*" >&2; exit 1; }
-mkdir -p "$BACKUP_ROOT" "$CONFIG_DIR" "$STATE_DIR"
+mkdir -p "$BACKUP_ROOT" "$CONFIG_DIR" "$STATE_DIR" "$APP_DIR"
 chmod 0750 "$CONFIG_DIR"; chmod 0700 "$STATE_DIR"
 
 backup_existing() {
