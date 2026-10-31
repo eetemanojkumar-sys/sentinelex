@@ -3,6 +3,7 @@ import hashlib
 import os
 import platform
 import socket
+import tempfile
 import time
 import json
 import uuid
@@ -14,12 +15,16 @@ import requests
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from outbox import acknowledge_batch, enqueue_batch, get_pending_batch
+
 CENTRAL_URL = os.getenv("SENTINELX_URL", "http://127.0.0.1:8000").rstrip("/")
 BOOTSTRAP_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
 AGENT_TOKEN = BOOTSTRAP_TOKEN
 HOST_ID = os.getenv("SENTINELX_HOST_ID", "")
-INTERVAL = max(5, int(os.getenv("SENTINELX_INTERVAL", "30")))
 STATE_FILE = Path(os.getenv("SENTINELX_STATE_FILE", str(Path(os.getenv("PROGRAMDATA", "/var/lib")) / "SentinelX" / "agent.json")))
+INTERVAL = max(5, int(os.getenv("SENTINELX_INTERVAL", "30")))
+AGENT_VERSION = "0.3.0"
+sequence = 0
 
 if platform.system() == "Windows":
     DEFAULT_WATCH_PATHS = r"C:\Windows\System32\drivers\etc"
@@ -40,6 +45,36 @@ MODEL_EXTENSIONS = {
 events = []
 event_lock = Lock()
 disk_alert_states = {}
+
+# Keep one collector per host identity. The OS releases this lock automatically
+# if the process exits or crashes, so stale lock files are harmless.
+_agent_lock_handle = None
+
+
+def acquire_single_instance_lock():
+    global _agent_lock_handle
+    lock_name = hashlib.sha256(HOST_ID.encode("utf-8")).hexdigest()[:16]
+    lock_path = Path(tempfile.gettempdir()) / f"sentinelx-agent-{lock_name}.lock"
+    handle = None
+    try:
+        handle = open(lock_path, "a+")
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write("0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, BlockingIOError):
+        if handle is not None:
+            handle.close()
+        return False
+    _agent_lock_handle = handle
+    return True
 
 
 def initialize_identity():
@@ -94,6 +129,7 @@ def initialize_identity():
     AGENT_TOKEN = state["agent_token"]
     HOST_ID = state["host_id"]
     print(f"Enrolled with SentinelX central; host_id={HOST_ID}", flush=True)
+
 
 
 def queue_event(event_type, severity, message, details=None):
@@ -190,10 +226,31 @@ def start_watchers():
 
 
 def send_payload(metrics):
-    with event_lock:
-        batch = events[:]
-        del events[:]
-    payload = {"host_id": HOST_ID, "metrics": metrics, "events": batch}
+    """Persist one immutable batch and retry it until the API acknowledges it."""
+    global sequence
+    payload = get_pending_batch()
+    if payload is None:
+        sequence += 1
+        with event_lock:
+            batch = events[:]
+            payload = {
+                "schema_version": 1,
+                "host_id": HOST_ID,
+                "batch_id": uuid.uuid4().hex,
+                "agent": {
+                    "version": AGENT_VERSION,
+                    "platform": platform.system(),
+                    "architecture": platform.machine(),
+                },
+                "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "sequence": sequence,
+                "metrics": metrics,
+                "events": batch,
+            }
+            # Only remove events after the exact payload is safely on disk.
+            enqueue_batch(payload)
+            del events[:len(batch)]
+    batch_size = len(payload["events"])
     try:
         response = requests.post(
             f"{CENTRAL_URL}/api/v1/telemetry",
@@ -202,15 +259,18 @@ def send_payload(metrics):
             timeout=10,
         )
         response.raise_for_status()
-        print(f"Telemetry sent; events={len(batch)}", flush=True)
+        acknowledge_batch(payload["batch_id"])
+        print(f"Telemetry acknowledged; events={batch_size}", flush=True)
     except requests.RequestException as exc:
-        with event_lock:
-            events[:0] = batch
-        print(f"Telemetry delivery failed: {exc}", flush=True)
+        # The SQLite outbox preserves this exact payload across retries/restarts.
+        print(f"Telemetry delivery pending acknowledgement: {exc}", flush=True)
 
 
 def main():
     initialize_identity()
+    if not acquire_single_instance_lock():
+        print(f"Another SentinelX agent is already running for host {HOST_ID}; exiting.", flush=True)
+        raise SystemExit(0)
     observer = start_watchers()
     try:
         while True:
