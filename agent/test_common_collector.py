@@ -1,29 +1,9 @@
-"""Cross-platform collector contract tests (run: python -m unittest -v)."""
+"""Shared collector contract tests (run: python -m unittest -v)."""
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from collectors import common
-
-
-class CommonCollectorTests(unittest.TestCase):
-    @patch.object(common.psutil, "cpu_percent", return_value=4.0)
-    @patch.object(common.psutil, "cpu_count", return_value=4)
-    @patch.object(common.psutil, "boot_time", return_value=1000.0)
-    @patch.object(common.psutil, "virtual_memory")
-    @patch.object(common.psutil, "swap_memory")
-    @patch.object(common.psutil, "disk_partitions", return_value=[])
-    @patch.object(common.psutil, "process_iter", return_value=[])
-    @patch.object(common.psutil, "net_connections", return_value=[])
-    @patch.object(common.psutil, "net_io_counters", return_value={})
-    @patch.object(common.psutil, "net_if_addrs", return_value={})
-    @patch.object(common.psutil, "sensors_temperatures", return_value={})
-    def test_shared_metrics_schema(
-        self, *_mocks
-    ):
-        # Set the memory/swap mock return values by their named patch objects.
-        # The decorator order is deliberately abstracted; use direct patches below.
-        pass
 
 
 class CommonCollectorContractTests(unittest.TestCase):
