@@ -14,16 +14,26 @@ fi
 echo "SentinelX Linux agent installer"
 echo "This installs/updates the endpoint agent only; it does not replace the central API or database."
 
-read -rp "Central API base URL [https://127.0.0.1:8443]: " CENTRAL_URL
-CENTRAL_URL="${CENTRAL_URL:-https://127.0.0.1:8443}"
+CENTRAL_URL="${SENTINELX_URL:-}"
+if [[ -z "$CENTRAL_URL" ]]; then
+  read -rp "Central API base URL [https://127.0.0.1:8443]: " CENTRAL_URL
+  CENTRAL_URL="${CENTRAL_URL:-https://127.0.0.1:8443}"
+fi
 CENTRAL_URL="${CENTRAL_URL%/}"
-read -rsp "SentinelX agent token: " AGENT_TOKEN
-echo
+AGENT_TOKEN="${SENTINELX_BOOTSTRAP_TOKEN:-}"
+if [[ -z "$AGENT_TOKEN" ]]; then
+  read -rsp "SentinelX bootstrap/enrollment token: " AGENT_TOKEN
+  echo
+fi
 if [[ -z "$AGENT_TOKEN" || "$AGENT_TOKEN" =~ [[:space:]] ]]; then
   echo "Token must be non-empty and contain no whitespace." >&2
   exit 1
 fi
-read -rp "CA certificate path (blank for system trust): " CA_SOURCE
+CA_SOURCE="${SENTINELX_CA_SOURCE:-}"
+if [[ -z "$CA_SOURCE" && -t 0 ]]; then
+  read -rp "CA certificate path (blank for system trust): " CA_SOURCE
+fi
+AGENT_INTERVAL="${SENTINELX_INTERVAL:-60}"
 
 command -v apt-get >/dev/null || { echo "This installer currently supports Debian/Ubuntu." >&2; exit 1; }
 export DEBIAN_FRONTEND=noninteractive
@@ -63,7 +73,7 @@ umask 077
   printf 'SENTINELX_INTERVAL=60\n'
   [[ -z "$CA_LINE" ]] || printf '%s\n' "$CA_LINE"
 } > "$CONFIG_DIR/agent.env"
-unset AGENT_TOKEN
+unset AGENT_TOKEN SENTINELX_BOOTSTRAP_TOKEN
 
 cat > "/etc/systemd/system/$SERVICE.service" <<EOF
 [Unit]
