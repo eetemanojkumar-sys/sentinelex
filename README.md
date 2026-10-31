@@ -1,69 +1,73 @@
 # SentinelX
 
-SentinelX is a rule-based, cross-platform endpoint health and security telemetry system. Linux and Windows agents report to a central FastAPI service backed by PostgreSQL. The project does not use Docker, AI/ML, Kubernetes, or predictive analytics.
+SentinelX is a rule-based cross-platform monitoring and security telemetry platform for Linux and Windows servers. The initial scale target is **1,000 endpoints** reporting to a centralized FastAPI/PostgreSQL control plane.
 
-## Current capabilities
+## Capabilities
 
-- Cross-platform CPU, memory, swap, disk, uptime, process and listening-port telemetry
-- Linux file-change monitoring and ClamAV executable/daemon status
-- Windows service inventory and Microsoft Defender status
-- Windows Security log collection for successful and failed logons (event IDs 4624 and 4625)
-- Central authenticated telemetry ingestion and PostgreSQL persistence
-- Dark-mode web dashboard with fleet overview, host inventory, disk history, events, processes, ports, endpoint protection and Windows services
-- 30-second default agent reporting interval; dashboard refreshes every 10 seconds
-- Disk usage rules: warning at 80%, critical at 90%
+- CPU, memory, swap, disk, uptime, process, network-interface and listening-port telemetry
+- Linux file-change monitoring and ClamAV availability
+- Windows service inventory, Microsoft Defender status and Security log events 4624/4625
+- Unique endpoint enrollment and per-agent credentials
+- Central live host snapshots, sampled resource history and security event storage
+- Fleet dashboard with 100-host pages, server-side hostname search, host drill-down and endpoint protection status
+- Automatic agent startup on Linux (systemd) and Windows (Task Scheduler)
+- Rule-based disk thresholds: warning at 80%, critical at 90%
 
-These are monitoring indicators, not proof of compromise. SentinelX does not automatically terminate processes or remediate hosts.
+SentinelX reports monitoring signals; it does not automatically kill processes, remediate systems or claim that a malware scan has been completed. It does not use AI/ML.
+
+## 1,000-endpoint baseline
+
+- 60-second heartbeat by default in the installers (~16.7 requests/second at 1,000 endpoints)
+- Latest host state updated on every heartbeat
+- Compact disk/resource history sampled every 5 minutes (~288,000 history rows/day at 1,000 endpoints)
+- 30-day telemetry and 180-day event retention via daily systemd timer
+- Two Uvicorn API workers and a conservative PostgreSQL pool baseline; measure and tune for the actual EC2/RDS instance
+- Dashboard host inventory is fetched in 100-host pages with server-side search
+
+This is an initial measured-capacity target, not a guarantee for every instance class or workload. Run the staging load test and inspect PostgreSQL CPU, IOPS, connections, storage growth and API p95/p99 latency before production sign-off.
+
+Detailed design and operating assumptions: [docs/SCALING-1000.md](docs/SCALING-1000.md).
 
 ## Architecture
 
 ```text
-Linux endpoint agent ---------\
-                               \ HTTPS + shared agent token
-Windows endpoint agent --------> Nginx TLS proxy -> FastAPI -> PostgreSQL
-                               /                    |
-Additional Linux agents ------/                     +-> Dashboard
+Linux / Windows agents (N endpoints)
+       | HTTPS, bootstrap enrollment, per-agent token
+       v
+Nginx TLS ingress -> FastAPI workers -> PostgreSQL
+                            |              |
+                      fleet APIs       agent credentials
+                      paginated hosts  latest host snapshot
+                      events            compact history
+                                        security events
+                            |
+                            v
+                      Web dashboard
 ```
 
-The central API is normally bound to `127.0.0.1:8000` behind a TLS reverse proxy. The dashboard is served at `/dashboard/`.
+The central API is normally bound to `127.0.0.1:8000` behind the existing TLS reverse proxy. Dashboard: `https://CENTRAL-HOST:8443/dashboard/`.
 
-Update the dashboard on an existing central Ubuntu deployment with one command:
+## Update existing central Ubuntu deployment
+
+On the existing central host, expected paths are `/opt/sentinelx`, `/opt/sentinelx/venv` and `/etc/sentinelx/sentinelx.env`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/eetemanojkumar-sys/sentinelex/dashboard-single-command-install/installers/linux/update-dashboard.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/eetemanojkumar-sys/sentinelex/scale-1000-servers/installers/linux/update-central.sh | sudo bash
 ```
 
-## Dashboard
+The updater backs up the API module and dashboard, installs the new API/dashboard, creates a protected admin token if absent, configures two API workers and DB connection pools, enables daily retention cleanup, restarts the API and checks its local health endpoint. It does not replace PostgreSQL, Nginx or TLS private keys.
 
-- Dashboard: `https://CENTRAL-HOST:8443/dashboard/` (adjust host/port for your deployment)
-- Health: `https://CENTRAL-HOST:8443/health`
-- API docs: `https://CENTRAL-HOST:8443/docs`
+The updater creates `SENTINELX_ADMIN_TOKEN` in `/etc/sentinelx/sentinelx.env`; it is not printed. The API service account needs read access to this environment file. Keep it protected and do not paste it into chat or logs.
 
-Dashboard views:
-- Overview: connected endpoints, latest CPU/memory readings, host status and recent events
-- Hosts: operating system, availability, resources, processes, ports, services and protection status
-- Disk monitoring: host/volume selectors, searchable inventory, 80%/90% thresholds and stored history
-- Security events: searchable event feed with severity filtering
-- Processes and network ports: latest endpoint snapshots
-- Endpoint protection: Microsoft Defender on Windows and ClamAV status on Linux
-- Windows services: service state, startup type, account and PID
+## Install/enroll a Linux endpoint
 
-The dashboard uses the existing read-only API endpoints and requires no frontend build step.
-
-## One-command Linux agent installation
-
-Run on a Debian/Ubuntu endpoint with sudo access:
+On Debian/Ubuntu with sudo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/eetemanojkumar-sys/sentinelex/dashboard-single-command-install/installers/linux/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/eetemanojkumar-sys/sentinelex/scale-1000-servers/installers/linux/install.sh | sudo bash
 ```
 
-The installer prompts for:
-1. Central API base URL, for example `https://172.31.41.98:8443`
-2. Shared SentinelX agent token (input is hidden)
-3. Optional CA/server certificate path for a private or self-signed TLS certificate
-
-It installs Python and Git prerequisites, downloads the selected branch, creates a virtual environment, installs agent dependencies, writes a root-only environment file, registers/enables the `sentinelx-agent` systemd service and starts it.
+Enter the central API URL, the bootstrap/enrollment token from the central environment, and optionally the public CA/server certificate for a private TLS deployment. The installer installs Python/Git prerequisites, creates a virtual environment, stores its config root-only, registers a systemd service and starts the agent.
 
 Logs:
 
@@ -71,53 +75,74 @@ Logs:
 sudo journalctl -u sentinelx-agent -f
 ```
 
-This installer deploys the endpoint agent only. It does not create or replace the central API, database, Nginx configuration, or TLS reverse proxy.
+## Install/enroll a Windows endpoint
 
-## One-command Windows agent installation
-
-Open **PowerShell as Administrator** on Windows 10/11 or Windows Server with Python 3 installed:
+Run PowerShell as Administrator:
 
 ```powershell
-irm https://raw.githubusercontent.com/eetemanojkumar-sys/sentinelex/dashboard-single-command-install/installers/windows/Install-SentinelX.ps1 | iex
+irm https://raw.githubusercontent.com/eetemanojkumar-sys/sentinelex/scale-1000-servers/installers/windows/Install-SentinelX.ps1 | iex
 ```
 
-The installer prompts for the central API URL, hidden agent token, and optional CA/server certificate path. It installs the agent and Python dependencies, uses machine-scope Windows DPAPI to protect the token at rest, applies restrictive ACLs, registers a SYSTEM startup task, and starts it.
-
-Agent log:
-
-```powershell
-Get-Content "$env:ProgramData\SentinelX\agent.log" -Tail 30
-```
+Enter the central API URL, bootstrap/enrollment token and optional public CA/server certificate. The installer registers a SYSTEM startup task and protects the bootstrap token at rest with machine-scope DPAPI. The agent stores its individual credential in `%ProgramData%\SentinelX\agent.json` with restricted ACLs.
 
 Task status:
 
 ```powershell
 Get-ScheduledTask -TaskName "SentinelX-Windows-Agent" | Select-Object TaskName,State
+Get-Content "$env:ProgramData\SentinelX\agent.log" -Tail 30
 ```
 
-If the central API uses a self-signed certificate, provide the matching public certificate file when prompted. Never distribute the TLS private key.
+## Enrollment and authentication
 
-## Central API endpoints
+- Installer supplies a bootstrap/enrollment token.
+- First agent start calls `POST /api/v1/agents/enroll` with hostname, OS and a persistent machine identifier.
+- API creates a unique per-agent token and stores only its SHA-256 hash.
+- Agent persists its token locally and sends it with every telemetry request.
+- API binds the credential to the enrolled host ID; spoofed host IDs are rejected.
+- Revocation invalidates that agent token.
+- During rollout, legacy shared-token telemetry remains enabled for existing unupgraded agents. After every endpoint has enrolled, set `SENTINELX_ALLOW_LEGACY_TOKEN=false` in the central service environment and restart the API. Keep the bootstrap/enrollment token for future approved enrollments and rotate it through a controlled rollout.
+
+Admin API endpoints require `X-Admin-Token` matching `SENTINELX_ADMIN_TOKEN`:
+- `GET /api/v1/admin/agents`
+- `POST /api/v1/admin/agents/{agent_id}/revoke`
+
+Do not expose the admin token in a dashboard or frontend. Operator SSO/RBAC and authenticated dashboard read APIs remain additional production-hardening work before exposure to untrusted networks.
+
+## API
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/health` | API health |
-| POST | `/api/v1/telemetry` | Authenticated agent telemetry ingestion |
-| GET | `/api/v1/hosts` | Latest metrics per host |
-| GET | `/api/v1/events` | Recent events |
-| GET | `/api/v1/summary` | Fleet summary |
-| GET | `/api/v1/disk-history` | Stored disk samples for a host and volume |
+| GET | `/health` | API + database health |
+| POST | `/api/v1/agents/enroll` | Bootstrap-authenticated enrollment |
+| POST | `/api/v1/telemetry` | Authenticated telemetry ingest |
+| GET | `/api/v1/hosts?limit=100&offset=0&search=...` | Paginated latest host snapshots; total in `X-Total-Count` |
+| GET | `/api/v1/summary` | Fleet count and latest 20 hosts |
+| GET | `/api/v1/events?limit=100&offset=0` | Bounded event query |
+| GET | `/api/v1/disk-history` | Sampled disk history |
+| GET | `/api/v1/admin/agents` | Enrolled agent inventory (admin token) |
+| POST | `/api/v1/admin/agents/{agent_id}/revoke` | Revoke endpoint credential (admin token) |
 
-## Security notes
+## Staging load test
 
-- Use a long, unique shared agent token. Rotate it immediately if it is exposed.
-- Protect the central API with TLS and restrict inbound security-group rules to trusted endpoint networks.
-- Keep the database and Uvicorn port private; expose only the TLS reverse-proxy port.
-- Linux installer stores its agent environment file with root-only permissions.
-- Windows installer protects the token using machine-scope DPAPI and restricts access to SYSTEM and local Administrators.
-- The current shared-token model is suitable for controlled deployments; per-agent credentials and role-based dashboard/API access are future hardening work.
-- The optional CA certificate supplied to installers must be the public certificate/CA chain only, never a private key.
+The script creates persistent synthetic enrollment records. Run it only against staging, never production:
 
-## Development principles
+```bash
+python -m pip install requests
+python scripts/load_test.py --url https://staging.example:8443 --token '<bootstrap-token>' --agents 1000 --concurrency 50 --ca /path/to/ca.crt
+```
 
-Python, FastAPI, PostgreSQL, native system services and transparent rule-based detection. No Docker, AI/ML, Kubernetes or predictive analytics.
+It reports successful enrollments, telemetry acceptance, elapsed time and per-agent latency. Revoke/remove test registrations and data from staging after testing.
+
+## Security and operational notes
+
+- Restrict inbound TLS ingress to trusted networks; keep PostgreSQL and Uvicorn private.
+- Use a unique high-entropy bootstrap token and a separate admin token. Store both in a secret manager for larger deployments.
+- Never distribute TLS private keys to endpoints; provide only the public CA/certificate chain.
+- Protect endpoint state files and installer configuration.
+- Back up PostgreSQL and test restore before production.
+- Retention defaults: telemetry 30 days, security events 180 days.
+- Consider Redis Streams/RabbitMQ/Kafka, time partitioning and additional API instances only after measured ingestion bursts, storage growth or p95 latency justify them. The 1k baseline writes directly to PostgreSQL; it does not claim a message-queue architecture.
+
+## CI and tests
+
+`requirements-dev.txt` includes pytest and httpx. GitHub Actions checks Python compilation, enrollment/authentication/history tests, dashboard JavaScript syntax and Linux shell-script syntax.
