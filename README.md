@@ -2,49 +2,37 @@
 
 SentinelX is an open-source, self-hosted infrastructure monitoring and security telemetry platform for Linux and Windows systems.
 
-It is designed to run inside infrastructure that you control. Each installation has its own central API, database, dashboard, and enrolled agents. SentinelX is not a hosted SaaS service and does not require a cloud account, vendor registration, or organization signup.
+Each installation runs its own central API, database and dashboard. There is no hosted SaaS tenant, customer registration, vendor cloud account or mandatory external service.
 
-## What it does
+## Features
 
-- Collects endpoint telemetry from Linux and Windows agents.
-- Tracks host inventory, CPU, memory, disk, network and host availability.
-- Receives rule-based security events from endpoint collectors.
-- Provides a central API and web dashboard.
-- Stores telemetry in the installation's own database.
-- Supports independent deployment without requiring Prometheus, Grafana, Node Exporter or Windows Exporter.
+- Linux and Windows endpoint collectors.
+- Host inventory, CPU, memory, disk, network and process telemetry.
+- Rule-based endpoint security events.
+- Central dashboard, metrics history and event APIs.
+- Local administrator authentication.
+- One-time agent enrollment, unique per-host credentials and revocation.
+- Local storage controlled by the operator.
 
 ## Architecture
 
 ```text
- Linux hosts                         Windows hosts
- +------------------+                +------------------+
- | SentinelX Agent  |                | SentinelX Agent  |
- | collectors       |                | collectors       |
- +--------+---------+                +---------+--------+
-          | HTTPS / agent token                |
-          +----------------+-------------------+
-                           |
-                   +-------v--------+
-                   | SentinelX      |
-                   | Central API    |
-                   | FastAPI        |
-                   +-------+--------+
-                           |
-                   +-------v--------+
-                   | Local database |
-                   | SQLite /       |
-                   | PostgreSQL     |
-                   +-------+--------+
-                           |
-                   +-------v--------+
-                   | Dashboard      |
-                   | /dashboard/    |
-                   +----------------+
+ Linux endpoints                   Windows endpoints
+ SentinelX agent                   SentinelX agent
+       |                                  |
+       +---------- HTTPS ----------------+
+                         |
+                SentinelX Central API
+                Admin auth + enrollment
+                         |
+                 Local database
+                         |
+                   Web dashboard
 ```
 
-## Quick start (central server)
+## Central server quick start
 
-Requirements: Python 3.11+, a supported database, and a Linux server for the central service.
+Requirements: Python 3.11+, a supported SQLAlchemy database, and a private Linux server recommended for the central API.
 
 ```bash
 git clone https://github.com/eetemanojkumar-sys/sentinelex.git
@@ -53,34 +41,43 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-export SENTINELX_AGENT_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
 export DATABASE_URL="sqlite:///./sentinelx.db"
-
+export SENTINELX_ADMIN_USERNAME="admin"
+export SENTINELX_ADMIN_PASSWORD="replace-with-a-long-unique-password"
+export SENTINELX_COOKIE_SECURE="false"  # local HTTP testing only
 uvicorn server.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000/dashboard/` on the server or access it through a properly secured reverse proxy. The API health endpoint is `/health`.
+Open `http://127.0.0.1:8000/login` and sign in with the local administrator credentials. For remote access, use HTTPS and set `SENTINELX_COOKIE_SECURE=true`.
 
-## Agent configuration
+## Enroll an agent
 
-Configure each agent with the central API URL and the installation's agent token using the supported agent configuration for your release. Keep the token secret and do not commit it to source control. The current prototype uses one installation-level token; per-agent enrollment, rotation and revocation are planned security work.
+1. Sign in as administrator.
+2. Create an enrollment token with `POST /api/v1/admin/agents/enrollment-tokens` (JSON body: `{"expires_minutes":30}`).
+3. Configure the agent with `SENTINELX_URL`, `SENTINELX_HOST_ID`, and the one-time `SENTINELX_ENROLLMENT_TOKEN`.
+4. Start the agent. It exchanges the enrollment token, stores its unique credential locally and uses it for telemetry.
+5. Remove the enrollment token from the agent environment after successful enrollment.
 
-## Important security notes
+Administrators can list credentials using `GET /api/v1/admin/agents` and revoke one using `POST /api/v1/admin/agents/{credential_id}/revoke`.
 
-- The dashboard and monitoring read APIs in this development branch do not yet have built-in user authentication. Bind the API to loopback or a trusted private interface and place it behind a TLS-enabled reverse proxy with access control before allowing remote access.
-- Do not expose the dashboard or API directly to the public internet.
-- Use a high-entropy agent token, protect environment files, restrict network access, and back up the database.
-- The current shared agent token is a prototype, not a per-agent identity system.
-- Review [Security](docs/SECURITY.md) and [Self-hosted installation](docs/SELF_HOSTED_INSTALLATION.md) before deploying.
+## Security
+
+The shared legacy agent token is disabled by default. The central API requires administrator authentication for the dashboard and monitoring/admin APIs. See [Security](docs/SECURITY.md) and [Self-hosted installation](docs/SELF_HOSTED_INSTALLATION.md).
+
+Do not expose the API directly to the public internet. Use a TLS reverse proxy, private networking and backups.
+
+## Tests
+
+```bash
+python -m unittest server.test_ingestion server.test_auth -v
+cd agent
+python -m unittest discover -v
+```
 
 ## Project status
 
-SentinelX is under active development. Linux and Windows collectors, central telemetry ingestion, host/event/history APIs and the dashboard are being developed. Check the repository's CI status and release notes before production use.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports, tests, documentation and platform-specific collector improvements are welcome.
+SentinelX is under active development. Review CI and release notes before production use.
 
 ## License
 
-A repository license has not yet been selected. Until a license is added, do not assume the code is granted under an open-source license; maintainers should select and add an explicit license before announcing a public open-source release.
+SentinelX is distributed under the MIT License. See [LICENSE](LICENSE).
