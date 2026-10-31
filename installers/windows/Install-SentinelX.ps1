@@ -21,12 +21,24 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 Write-Host "SentinelX Windows agent installer" -ForegroundColor Cyan
-$CentralUrl = Read-Host "Central API base URL (example: https://172.31.41.98:8443)"
+$CentralUrl = $env:SENTINELX_URL
+if ([string]::IsNullOrWhiteSpace($CentralUrl)) {
+    $CentralUrl = Read-Host "Central API base URL (example: https://central:8443)"
+}
 if ([string]::IsNullOrWhiteSpace($CentralUrl)) { throw "Central API URL is required." }
 $CentralUrl = $CentralUrl.TrimEnd("/")
-$SecureToken = Read-Host "SentinelX agent token" -AsSecureString
+if (-not [string]::IsNullOrWhiteSpace($env:SENTINELX_BOOTSTRAP_TOKEN)) {
+    $SecureToken = ConvertTo-SecureString $env:SENTINELX_BOOTSTRAP_TOKEN -AsPlainText -Force
+    Remove-Item Env:\SENTINELX_BOOTSTRAP_TOKEN -ErrorAction SilentlyContinue
+} else {
+    $SecureToken = Read-Host "SentinelX bootstrap/enrollment token" -AsSecureString
+}
 if ($SecureToken.Length -eq 0) { throw "Agent token is required." }
-$CaSource = Read-Host "Path to central API CA/server certificate (press Enter if publicly trusted)"
+$CaSource = $env:SENTINELX_CA_SOURCE
+if ([string]::IsNullOrWhiteSpace($CaSource)) {
+    $CaSource = Read-Host "Path to central API CA/server certificate (press Enter if publicly trusted)"
+}
+$AgentInterval = if ($env:SENTINELX_INTERVAL) { $env:SENTINELX_INTERVAL } else { "60" }
 
 $PythonCommand = Get-Command py -ErrorAction SilentlyContinue
 if ($PythonCommand) {
@@ -99,7 +111,7 @@ try {
     $env:SENTINELX_AGENT_TOKEN = [Text.Encoding]::UTF8.GetString($plain)
     $env:SENTINELX_URL = "__CENTRAL_URL__"
     $env:SENTINELX_HOST_ID = $env:COMPUTERNAME
-    $env:SENTINELX_INTERVAL = "60"
+    $env:SENTINELX_INTERVAL = "__AGENT_INTERVAL__"
     __CA_LINE__
     Set-Location "__INSTALL_DIR__\agent"
     $python = "__INSTALL_DIR__\.venv\Scripts\python.exe"
@@ -112,6 +124,7 @@ try {
 '@
 $Runner = $Runner.Replace("__CENTRAL_URL__", $CentralUrl.Replace('"',''))
 $Runner = $Runner.Replace("__INSTALL_DIR__", $InstallDir.Replace('"',''))
+$Runner = $Runner.Replace("__AGENT_INTERVAL__", $AgentInterval)
 if ($CaLine) { $Runner = $Runner.Replace("__CA_LINE__", $CaLine) }
 else { $Runner = $Runner.Replace("__CA_LINE__", "# Using Windows/Python system certificate trust") }
 $RunnerPath = Join-Path $InstallDir "Run-SentinelX.ps1"
