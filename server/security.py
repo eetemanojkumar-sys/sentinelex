@@ -1,4 +1,4 @@
-"""Small, dependency-free security primitives for SentinelX SaaS identity.
+"""Small, dependency-free security primitives for SentinelX local administrator and agent credentials.
 
 These helpers do not replace route-level authorization, CSRF protection, TLS,
 rate limiting, or tenant-scoped database queries.
