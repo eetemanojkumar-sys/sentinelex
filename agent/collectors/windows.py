@@ -73,7 +73,8 @@ def collect_security_events(limit=25):
     script = (
         "$ErrorActionPreference = 'Stop'; "
         "$items = Get-WinEvent -FilterHashtable @{LogName='Security'; "
-        "Id=4624,4625} -MaxEvents " + str(safe_limit) + "; "
+        "Id=4624,4625; StartTime=(Get-Date).AddMinutes(-5)} "
+        "-MaxEvents " + str(safe_limit) + "; "
         "$items | ForEach-Object { "
         "[PSCustomObject]@{ "
         "record_id=$_.RecordId; event_id=$_.Id; "
