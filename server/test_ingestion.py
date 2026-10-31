@@ -17,11 +17,11 @@ class TelemetryIngestionTests(unittest.TestCase):
             host_id="test-host-01",
             batch_id="test-batch-0001",
             sequence=1,
-            agent=main.AgentInfo(
-                version="test",
-                platform="Linux",
-                architecture="x86_64",
-            ),
+            agent={
+                "version": "test",
+                "platform": "Linux",
+                "architecture": "x86_64",
+            },
             metrics={"hostname": "test-host", "cpu_percent": 12.5},
             events=[
                 main.EventIn(
