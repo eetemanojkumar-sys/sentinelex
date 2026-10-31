@@ -50,7 +50,7 @@ def enqueue_batch(payload):
 
 def get_pending_batch():
     """Return the oldest unacknowledged batch, if one exists."""
-    with _connect() as connection:
+    with _connection() as connection:
         row = connection.execute(
             "SELECT payload_json FROM pending_batches ORDER BY created_at, rowid LIMIT 1"
         ).fetchone()
@@ -59,7 +59,7 @@ def get_pending_batch():
 
 def acknowledge_batch(batch_id):
     """Remove a batch only after the central API returns a successful response."""
-    with _connect() as connection:
+    with _connection() as connection:
         connection.execute(
             "DELETE FROM pending_batches WHERE batch_id = ?", (batch_id,)
         )
