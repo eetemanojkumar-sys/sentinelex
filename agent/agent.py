@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 from threading import Lock
 
-import psutil
 import requests
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
