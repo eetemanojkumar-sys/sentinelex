@@ -1,43 +1,70 @@
-"""SentinelX central telemetry API (rule-based; no AI/ML)."""
+"""SentinelX scalable central API for multi-host telemetry."""
+import hashlib
 import os
+import secrets
+import uuid
 from datetime import datetime, timezone
-from typing import Any
 from pathlib import Path
+from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, create_engine, desc, select
+from sqlalchemy import (
+    Boolean, DateTime, Index, Integer, JSON, String, UniqueConstraint, create_engine, desc,
+    func, select, text
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.sql import over
 
-TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
+BOOTSTRAP_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
+ADMIN_TOKEN = os.getenv("SENTINELX_ADMIN_TOKEN", "")
+HISTORY_INTERVAL_SECONDS = max(60, int(os.getenv("SENTINELX_HISTORY_INTERVAL_SECONDS", "300")))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sentinelx.db")
-if not TOKEN:
+if not BOOTSTRAP_TOKEN:
     raise RuntimeError("SENTINELX_AGENT_TOKEN must be configured")
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+is_sqlite = DATABASE_URL.startswith("sqlite")
+connect_args = {"check_same_thread": False} if is_sqlite else {}
+engine_options = {
+    "pool_pre_ping": True,
+    "pool_recycle": int(os.getenv("DB_POOL_RECYCLE_SECONDS", "1800")),
+}
+if not is_sqlite:
+    engine_options.update({
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "20")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "30")),
+        "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "30")),
+    })
+engine = create_engine(DATABASE_URL, connect_args=connect_args, **engine_options)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
     pass
 
 
-class Telemetry(Base):
-    __tablename__ = "telemetry"
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
+class AgentCredential(Base):
+    __tablename__ = "agent_credentials"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    host_id: Mapped[str] = mapped_column(String(255), index=True)
-    received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
-    )
-    metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
+    agent_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    host_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    hostname: Mapped[str] = mapped_column(String(255))
+    os_name: Mapped[str] = mapped_column(String(80))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 
 class IngestedBatch(Base):
-    """Idempotency ledger: one accepted batch per host and batch identifier."""
+    """Idempotency ledger preventing duplicate writes for retried batches."""
     __tablename__ = "ingested_batches"
     __table_args__ = (
         UniqueConstraint("host_id", "batch_id", name="uq_ingested_batch_host_batch"),
@@ -45,52 +72,51 @@ class IngestedBatch(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     host_id: Mapped[str] = mapped_column(String(255), index=True)
     batch_id: Mapped[str] = mapped_column(String(64))
-    received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class Telemetry(Base):
+    __tablename__ = "telemetry"
+    __table_args__ = (
+        Index("ix_telemetry_host_received", "host_id", "received_at"),
     )
-
-
-class Host(Base):
-    """Latest identity and lifecycle metadata for each endpoint."""
-    __tablename__ = "hosts"
-    host_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    hostname: Mapped[str] = mapped_column(String(255), default="")
-    platform: Mapped[str] = mapped_column(String(100), default="")
-    os_release: Mapped[str] = mapped_column(String(255), default="")
-    architecture: Mapped[str] = mapped_column(String(100), default="")
-    agent_version: Mapped[str] = mapped_column(String(50), default="")
-    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
-    last_sequence: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class LatestMetrics(Base):
-    """One bounded latest snapshot per host for fast fleet queries."""
-    __tablename__ = "latest_metrics"
-    host_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(255), index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
 class SecurityEvent(Base):
     __tablename__ = "security_events"
+    __table_args__ = (
+        Index("ix_security_events_host_created", "host_id", "created_at"),
+        Index("ix_security_events_severity_created", "severity", "created_at"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     host_id: Mapped[str] = mapped_column(String(255), index=True)
     event_type: Mapped[str] = mapped_column(String(100), index=True)
     severity: Mapped[str] = mapped_column(String(20), default="info")
     message: Mapped[str] = mapped_column(String(1000))
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+
+class HostLatest(Base):
+    """Most recent telemetry snapshot for each endpoint."""
+    __tablename__ = "host_latest"
+    host_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
 Base.metadata.create_all(bind=engine)
+
 app = FastAPI(
     title="SentinelX Central API",
     version="0.2.0",
-    description="Independent cross-platform infrastructure health and security telemetry platform",
+    description="Scalable rule-based telemetry control plane for Linux and Windows fleets.",
 )
-
 DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
 app.mount("/dashboard", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="dashboard")
 
@@ -102,27 +128,26 @@ def dashboard_home():
 
 class EventIn(BaseModel):
     event_type: str = Field(min_length=1, max_length=100)
-    severity: str = Field(default="info",
-                           pattern="^(info|low|medium|high|critical)$")
+    severity: str = Field(default="info", pattern="^(info|low|medium|high|critical)$")
     message: str = Field(min_length=1, max_length=1000)
     details: dict[str, Any] = Field(default_factory=dict)
-
-
-class AgentInfo(BaseModel):
-    version: str = Field(default="", max_length=50)
-    platform: str = Field(default="", max_length=100)
-    architecture: str = Field(default="", max_length=100)
 
 
 class TelemetryIn(BaseModel):
     host_id: str = Field(min_length=1, max_length=255)
     batch_id: str | None = Field(default=None, min_length=1, max_length=64)
-    metrics: dict[str, Any]
-    events: list[EventIn] = Field(default_factory=list, max_length=500)
     schema_version: int = Field(default=1, ge=1, le=100)
-    agent: AgentInfo = Field(default_factory=AgentInfo)
+    agent: dict[str, Any] = Field(default_factory=dict)
     collected_at: datetime | None = None
     sequence: int = Field(default=0, ge=0)
+    metrics: dict[str, Any>
+    events: list[EventIn] = Field(default_factory=list, max_length=500)
+
+
+class EnrollmentIn(BaseModel):
+    hostname: str = Field(min_length=1, max_length=255)
+    os_name: str = Field(min_length=1, max_length=80)
+    machine_id: str = Field(min_length=8, max_length=128)
 
 
 def db_session():
@@ -133,99 +158,191 @@ def db_session():
         session.close()
 
 
-def verify_agent(token: str | None):
-    if not token or token != TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid agent token")
+def token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+
+def authenticate_admin(authorization: str | None = Header(default=None)):
+    if not ADMIN_TOKEN:
+        raise HTTPException(status_code=503, detail="Administrator access is not configured")
+    scheme, _, supplied = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not supplied or not secrets.compare_digest(supplied, ADMIN_TOKEN):
+        raise HTTPException(status_code=401, detail="Administrator authentication required")
+    return True
+
+def authenticate_agent(token: str | None, db: Session):
+    if not token:
+        raise HTTPException(status_code=401, detail="Agent token required")
+    credential = db.scalar(
+        select(AgentCredential).where(AgentCredential.token_hash == token_digest(token))
+    )
+    if credential:
+        if credential.revoked:
+            raise HTTPException(status_code=401, detail="Agent credential revoked")
+        return credential
+    # Temporary compatibility for agents not yet upgraded to per-agent enrollment.
+    if secrets.compare_digest(token, BOOTSTRAP_TOKEN):
+        return None
+    raise HTTPException(status_code=401, detail="Invalid agent token")
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "sentinelx-central", "version": "0.2.0"}
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        database = "ok"
+    except Exception:
+        database = "unavailable"
+    if database != "ok":
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    return {"status": "ok", "service": "sentinelx-central", "version": "0.3.0", "database": database}
+
+
+@app.post("/api/v1/agents/enroll", status_code=201)
+def enroll(payload: EnrollmentIn, x_agent_token: str | None = Header(default=None),
+           db: Session = Depends(db_session)):
+    if not x_agent_token or not secrets.compare_digest(x_agent_token, BOOTSTRAP_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid enrollment token")
+
+    # A machine ID is stable on that endpoint. Re-enrollment rotates its token.
+    host_id = f"{payload.hostname}-{hashlib.sha256(payload.machine_id.encode()).hexdigest()[:12]}"
+    existing = db.scalar(select(AgentCredential).where(AgentCredential.host_id == host_id))
+    raw_token = secrets.token_urlsafe(48)
+    if existing:
+        existing.token_hash = token_digest(raw_token)
+        existing.hostname = payload.hostname
+        existing.os_name = payload.os_name
+        existing.revoked = False
+        existing.last_seen = utcnow()
+        credential = existing
+    else:
+        credential = AgentCredential(
+            agent_id=str(uuid.uuid4()),
+            host_id=host_id,
+            hostname=payload.hostname,
+            os_name=payload.os_name,
+            token_hash=token_digest(raw_token),
+            last_seen=utcnow(),
+            revoked=False,
+        )
+        db.add(credential)
+    db.commit()
+    db.refresh(credential)
+    return {
+        "agent_id": credential.agent_id,
+        "host_id": credential.host_id,
+        "agent_token": raw_token,
+        "token_type": "Bearer",
+        "message": "Store this credential securely; it is returned only during enrollment.",
+    }
 
 
 @app.post("/api/v1/telemetry", status_code=202)
 def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None),
            db: Session = Depends(db_session)):
-    verify_agent(x_agent_token)
-    now = datetime.now(timezone.utc)
+    credential = authenticate_agent(x_agent_token, db)
+    if credential and payload.host_id != credential.host_id:
+        raise HTTPException(status_code=403, detail="Host identity does not match enrolled agent")
+
+    now = utcnow()
     if payload.batch_id:
-        # Flush the unique idempotency record before writing any telemetry.
-        # A retry after a lost HTTP response is acknowledged without duplicating
-        # metric samples, host updates, or security events.
         db.add(IngestedBatch(host_id=payload.host_id, batch_id=payload.batch_id))
         try:
             db.flush()
         except IntegrityError:
             db.rollback()
             return {
-                "accepted": True,
-                "duplicate": True,
-                "host_id": payload.host_id,
-                "events_received": 0,
+                "accepted": True, "duplicate": True,
+                "host_id": payload.host_id, "events_received": 0,
             }
-    db.add(Telemetry(host_id=payload.host_id, metrics=payload.metrics))
-    snapshot = db.get(LatestMetrics, payload.host_id)
-    if snapshot is None:
-        snapshot = LatestMetrics(host_id=payload.host_id, received_at=now, metrics=payload.metrics)
-        db.add(snapshot)
+
+    latest_row = db.get(HostLatest, payload.host_id)
+    if latest_row:
+        latest_row.received_at = now
+        latest_row.metrics = payload.metrics
     else:
-        snapshot.received_at = now
-        snapshot.metrics = payload.metrics
-    host = db.get(Host, payload.host_id)
-    os_info = payload.metrics.get("os", {}) if isinstance(payload.metrics, dict) else {}
-    os_info = os_info if isinstance(os_info, dict) else {}
-    if host is None:
-        host = Host(host_id=payload.host_id)
-        db.add(host)
-    host.hostname = str(payload.metrics.get("hostname") or payload.host_id)[:255]
-    host.platform = str(payload.agent.platform or os_info.get("system") or payload.metrics.get("platform") or "")[:100]
-    host.os_release = str(os_info.get("release") or os_info.get("version") or "")[:255]
-    host.architecture = str(payload.agent.architecture or os_info.get("machine") or "")[:100]
-    host.agent_version = payload.agent.version[:50]
-    host.last_seen = now
-    host.last_sequence = max(host.last_sequence or 0, payload.sequence)
-    for event in payload.events:
-        db.add(SecurityEvent(
-            host_id=payload.host_id,
-            event_type=event.event_type,
-            severity=event.severity,
-            message=event.message,
-            details=event.details,
-        ))
+        db.add(HostLatest(host_id=payload.host_id, received_at=now, metrics=payload.metrics))
+
+    # Keep the live snapshot current while limiting historical writes.
+    last_history = db.scalar(
+        select(func.max(Telemetry.received_at)).where(Telemetry.host_id == payload.host_id)
+    )
+    if last_history is not None and last_history.tzinfo is None:
+        last_history = last_history.replace(tzinfo=timezone.utc)
+    if last_history is None or (now - last_history).total_seconds() >= HISTORY_INTERVAL_SECONDS:
+        db.add(Telemetry(host_id=payload.host_id, received_at=now, metrics=payload.metrics))
+
+    if payload.events:
+        db.add_all([
+            SecurityEvent(
+                host_id=payload.host_id, event_type=event.event_type,
+                severity=event.severity, message=event.message,
+                details=event.details, created_at=now,
+            )
+            for event in payload.events
+        ])
+    if credential:
+        credential.last_seen = now
     db.commit()
-    return {"accepted": True, "host_id": payload.host_id,
-            "events_received": len(payload.events)}
+    return {
+        "accepted": True, "host_id": payload.host_id,
+        "events_received": len(payload.events),
+    }
 
 
 @app.get("/api/v1/hosts")
-def hosts(db: Session = Depends(db_session)):
-    snapshots = db.scalars(select(LatestMetrics).order_by(LatestMetrics.host_id)).all()
-    registry = {row.host_id: row for row in db.scalars(select(Host)).all()}
-    result = []
-    for row in snapshots:
-        registered = registry.get(row.host_id)
-        result.append({
-            "host_id": row.host_id,
-            "last_seen": row.received_at,
-            "metrics": row.metrics,
-            "hostname": registered.hostname if registered else row.host_id,
-            "platform": registered.platform if registered else row.metrics.get("platform", ""),
-            "os_release": registered.os_release if registered else "",
-            "architecture": registered.architecture if registered else "",
-            "agent_version": registered.agent_version if registered else "",
-            "last_sequence": registered.last_sequence if registered else 0,
-        })
-    return result
+def hosts(response: Response, _admin: bool = Depends(authenticate_admin), limit: int = Query(default=100, ge=1, le=250),
+          offset: int = Query(default=0, ge=0), search: str | None = None,
+          db: Session = Depends(db_session)):
+    query = select(HostLatest)
+    if search:
+        query = query.where(HostLatest.host_id.ilike(f"%{search[:100]}%"))
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    rows = db.scalars(
+        query.order_by(HostLatest.host_id).offset(offset).limit(limit)
+    ).all()
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Limit"] = str(limit)
+    response.headers["X-Offset"] = str(offset)
+    return [{
+        "host_id": row.host_id,
+        "last_seen": row.received_at,
+        "metrics": row.metrics,
+    } for row in rows]
+
+
+@app.get("/api/v1/summary")
+def summary(_admin: bool = Depends(authenticate_admin), db: Session = Depends(db_session)):
+    host_count = db.scalar(select(func.count()).select_from(HostLatest)) or 0
+    latest_hosts = db.scalars(
+        select(HostLatest).order_by(desc(HostLatest.received_at)).limit(20)
+    ).all()
+    recent = db.scalars(
+        select(SecurityEvent).order_by(desc(SecurityEvent.created_at)).limit(10)
+    ).all()
+    return {
+        "monitored_hosts": host_count,
+        "latest_hosts": [{
+            "host_id": row.host_id, "metrics": row.metrics, "last_seen": row.received_at
+        } for row in latest_hosts],
+        "recent_events": [{
+            "host_id": event.host_id, "severity": event.severity,
+            "event_type": event.event_type, "message": event.message,
+            "created_at": event.created_at,
+        } for event in recent],
+    }
 
 
 @app.get("/api/v1/events")
-def events(limit: int = 100, db: Session = Depends(db_session)):
-    limit = max(1, min(limit, 500))
+def events(limit: int = Query(default=100, ge=1, le=500),
+           _admin: bool = Depends(authenticate_admin),
+           db: Session = Depends(db_session)):
     rows = db.scalars(
         select(SecurityEvent).order_by(desc(SecurityEvent.created_at)).limit(limit)
     ).all()
     return [{
-        "id": row.id,
         "host_id": row.host_id,
         "event_type": row.event_type,
         "severity": row.severity,
@@ -235,60 +352,36 @@ def events(limit: int = 100, db: Session = Depends(db_session)):
     } for row in rows]
 
 
-
 @app.get("/api/v1/disk-history")
-def disk_history(host_id: str, mountpoint: str, limit: int = 60,
+def disk_history(host_id: str = Query(min_length=1, max_length=255),
+                 mountpoint: str = Query(min_length=1, max_length=1024),
+                 limit: int = Query(default=120, ge=1, le=500),
+                 _admin: bool = Depends(authenticate_admin),
                  db: Session = Depends(db_session)):
-    """Return recent stored disk-usage samples for one host and mount point."""
-    limit = max(2, min(limit, 500))
     rows = db.scalars(
-        select(Telemetry)
-        .where(Telemetry.host_id == host_id)
-        .order_by(desc(Telemetry.received_at))
-        .limit(limit)
+        select(Telemetry).where(Telemetry.host_id == host_id)
+        .order_by(desc(Telemetry.received_at)).limit(500)
     ).all()
     samples = []
     for row in reversed(rows):
-        disk_data = (row.metrics or {}).get("disk", {})
-        volume = disk_data.get(mountpoint) if isinstance(disk_data, dict) else None
-        if not isinstance(volume, dict) or volume.get("percent") is None:
-            continue
-        samples.append({
-            "recorded_at": row.received_at,
-            "percent": volume.get("percent"),
-            "total_bytes": volume.get("total_bytes"),
-            "used_bytes": volume.get("used_bytes"),
-            "free_bytes": volume.get("free_bytes"),
-        })
-    return {"host_id": host_id, "mountpoint": mountpoint, "samples": samples}
-
-
-@app.get("/api/v1/summary")
-def summary(db: Session = Depends(db_session)):
-    latest_hosts = [{
-        "host_id": row.host_id,
-        "metrics": row.metrics,
-        "last_seen": row.received_at,
-    } for row in db.scalars(select(LatestMetrics).order_by(LatestMetrics.host_id)).all()]
-    recent = db.scalars(
-        select(SecurityEvent).order_by(desc(SecurityEvent.created_at)).limit(10)
-    ).all()
-    return {
-        "monitored_hosts": len(latest_hosts),
-        "latest_hosts": latest_hosts,
-        "recent_events": [{
-            "host_id": event.host_id,
-            "severity": event.severity,
-            "event_type": event.event_type,
-            "message": event.message,
-            "created_at": event.created_at,
-        } for event in recent],
-    }
-
+        disk = (row.metrics or {}).get("disk") or {}
+        volume = disk.get(mountpoint)
+        if isinstance(volume, dict) and "percent" in volume:
+            samples.append({
+                "received_at": row.received_at,
+                "percent": volume.get("percent"),
+                "total_bytes": volume.get("total_bytes"),
+                "used_bytes": volume.get("used_bytes"),
+                "free_bytes": volume.get("free_bytes"),
+            })
+    return {"host_id": host_id, "mountpoint": mountpoint, "samples": samples[-limit:]}
 
 
 @app.get("/api/v1/metrics/history")
-def metrics_history(host_id: str, metric: str = "cpu", limit: int = 120,
+def metrics_history(host_id: str = Query(min_length=1, max_length=255),
+                    metric: str = Query(default="cpu", regex="^(cpu|memory|network)$"),
+                    limit: int = Query(default=120, ge=2, le=500),
+                    _admin: bool = Depends(authenticate_admin),
                     db: Session = Depends(db_session)):
     """Return bounded historical CPU, memory or network samples for one host."""
     if metric not in {"cpu", "memory", "network"}:
