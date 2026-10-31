@@ -1,0 +1,14 @@
+[Unit]
+Description=SentinelX telemetry retention cleanup
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=sentinelx
+Group=sentinelx
+WorkingDirectory=/opt/sentinelx
+EnvironmentFile=/etc/sentinelx/sentinelx.env
+ExecStart=/opt/sentinelx/venv/bin/python /opt/sentinelx/scripts/retention_cleanup.py
+NoNewPrivileges=true
+PrivateTmp=true
