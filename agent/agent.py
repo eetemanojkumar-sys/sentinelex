@@ -15,6 +15,8 @@ CENTRAL_URL = os.getenv("SENTINELX_URL", "http://127.0.0.1:8000").rstrip("/")
 AGENT_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
 HOST_ID = os.getenv("SENTINELX_HOST_ID", socket.gethostname())
 INTERVAL = max(5, int(os.getenv("SENTINELX_INTERVAL", "30")))
+AGENT_VERSION = "0.2.0"
+sequence = 0
 
 if platform.system() == "Windows":
     DEFAULT_WATCH_PATHS = r"C:\Windows\System32\drivers\etc"
@@ -131,10 +133,12 @@ def start_watchers():
 
 
 def send_payload(metrics):
+    global sequence
+    sequence += 1
     with event_lock:
         batch = events[:]
         del events[:]
-    payload = {"host_id": HOST_ID, "metrics": metrics, "events": batch}
+    payload = {"schema_version": 1, "host_id": HOST_ID, "agent": {"version": AGENT_VERSION, "platform": platform.system(), "architecture": platform.machine()}, "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "sequence": sequence, "metrics": metrics, "events": batch}
     try:
         response = requests.post(
             f"{CENTRAL_URL}/api/v1/telemetry",
