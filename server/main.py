@@ -48,6 +48,14 @@ class Host(Base):
     last_sequence: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class LatestMetrics(Base):
+    """One bounded latest snapshot per host for fast fleet queries."""
+    __tablename__ = "latest_metrics"
+    host_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class SecurityEvent(Base):
     __tablename__ = "security_events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -125,6 +133,13 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
     verify_agent(x_agent_token)
     now = datetime.now(timezone.utc)
     db.add(Telemetry(host_id=payload.host_id, metrics=payload.metrics))
+    snapshot = db.get(LatestMetrics, payload.host_id)
+    if snapshot is None:
+        snapshot = LatestMetrics(host_id=payload.host_id, received_at=now, metrics=payload.metrics)
+        db.add(snapshot)
+    else:
+        snapshot.received_at = now
+        snapshot.metrics = payload.metrics
     host = db.get(Host, payload.host_id)
     os_info = payload.metrics.get("os", {}) if isinstance(payload.metrics, dict) else {}
     os_info = os_info if isinstance(os_info, dict) else {}
@@ -153,21 +168,23 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
 
 @app.get("/api/v1/hosts")
 def hosts(db: Session = Depends(db_session)):
-    rows = db.scalars(select(Telemetry).order_by(desc(Telemetry.received_at))).all()
-    latest = {}
-    for row in rows:
-        if row.host_id not in latest:
-            latest[row.host_id] = {
-                "host_id": row.host_id,
-                "last_seen": row.received_at,
-                "metrics": row.metrics,
-            }
+    snapshots = db.scalars(select(LatestMetrics).order_by(LatestMetrics.host_id)).all()
     registry = {row.host_id: row for row in db.scalars(select(Host)).all()}
-    for host_id, item in latest.items():
-        registered = registry.get(host_id)
-        if registered:
-            item.update({"hostname": registered.hostname, "platform": registered.platform or item["metrics"].get("platform", ""), "os_release": registered.os_release, "architecture": registered.architecture, "agent_version": registered.agent_version, "last_sequence": registered.last_sequence})
-    return list(latest.values())
+    result = []
+    for row in snapshots:
+        registered = registry.get(row.host_id)
+        result.append({
+            "host_id": row.host_id,
+            "last_seen": row.received_at,
+            "metrics": row.metrics,
+            "hostname": registered.hostname if registered else row.host_id,
+            "platform": registered.platform if registered else row.metrics.get("platform", ""),
+            "os_release": registered.os_release if registered else "",
+            "architecture": registered.architecture if registered else "",
+            "agent_version": registered.agent_version if registered else "",
+            "last_sequence": registered.last_sequence if registered else 0,
+        })
+    return result
 
 
 @app.get("/api/v1/events")
@@ -217,17 +234,11 @@ def disk_history(host_id: str, mountpoint: str, limit: int = 60,
 
 @app.get("/api/v1/summary")
 def summary(db: Session = Depends(db_session)):
-    host_rows = db.scalars(select(Telemetry).order_by(desc(Telemetry.received_at))).all()
-    seen = set()
-    latest_hosts = []
-    for row in host_rows:
-        if row.host_id not in seen:
-            seen.add(row.host_id)
-            latest_hosts.append({
-                "host_id": row.host_id,
-                "metrics": row.metrics,
-                "last_seen": row.received_at,
-            })
+    latest_hosts = [{
+        "host_id": row.host_id,
+        "metrics": row.metrics,
+        "last_seen": row.received_at,
+    } for row in db.scalars(select(LatestMetrics).order_by(LatestMetrics.host_id)).all()]
     recent = db.scalars(
         select(SecurityEvent).order_by(desc(SecurityEvent.created_at)).limit(10)
     ).all()
@@ -242,3 +253,30 @@ def summary(db: Session = Depends(db_session)):
             "created_at": event.created_at,
         } for event in recent],
     }
+
+
+
+@app.get("/api/v1/metrics/history")
+def metrics_history(host_id: str, metric: str = "cpu", limit: int = 120,
+                    db: Session = Depends(db_session)):
+    """Return bounded historical CPU, memory or network samples for one host."""
+    if metric not in {"cpu", "memory", "network"}:
+        raise HTTPException(status_code=400, detail="metric must be cpu, memory, or network")
+    limit = max(2, min(limit, 500))
+    rows = db.scalars(select(Telemetry).where(Telemetry.host_id == host_id)
+                      .order_by(desc(Telemetry.received_at)).limit(limit)).all()
+    samples = []
+    for row in reversed(rows):
+        data = row.metrics or {}
+        if metric == "cpu":
+            value = data.get("cpu_percent")
+            sample = {"recorded_at": row.received_at, "value": value}
+        elif metric == "memory":
+            memory = data.get("memory") or {}
+            sample = {"recorded_at": row.received_at, "value": memory.get("percent")}
+        else:
+            interfaces = data.get("network_interfaces") or {}
+            sample = {"recorded_at": row.received_at, "interfaces": interfaces}
+        if metric == "network" or sample.get("value") is not None:
+            samples.append(sample)
+    return {"host_id": host_id, "metric": metric, "samples": samples}
