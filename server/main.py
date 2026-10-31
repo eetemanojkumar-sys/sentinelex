@@ -140,7 +140,7 @@ class TelemetryIn(BaseModel):
     agent: dict[str, Any] = Field(default_factory=dict)
     collected_at: datetime | None = None
     sequence: int = Field(default=0, ge=0)
-    metrics: dict[str, Any>
+    metrics: dict[str, Any]
     events: list[EventIn] = Field(default_factory=list, max_length=500)
 
 
