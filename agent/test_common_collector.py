@@ -13,7 +13,7 @@ class CommonCollectorContractTests(unittest.TestCase):
              patch.object(common.psutil, "net_connections", return_value=[]), \
              patch.object(common.psutil, "net_io_counters", return_value={}), \
              patch.object(common.psutil, "net_if_addrs", return_value={}), \
-             patch.object(common.psutil, "sensors_temperatures", return_value={}), \
+             patch.object(common.psutil, "sensors_temperatures", return_value={}, create=True), \
              patch.object(common.psutil, "virtual_memory",
                           return_value=SimpleNamespace(total=100, available=50, percent=50)), \
              patch.object(common.psutil, "swap_memory",
