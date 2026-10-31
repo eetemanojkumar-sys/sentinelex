@@ -109,7 +109,13 @@ if [ "$MODE" != repair ]; then
 fi
 
 if [ ! -f "$ENV_FILE" ]; then
+  if [ -d "$APP_DIR" ] && [ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    die "Application files exist but the environment file is missing. Restore /etc/sentinelx/sentinelx.env first; refusing to create a new database identity."
+  fi
   [ "$SKIP_POSTGRES" -eq 0 ] || die "Cannot create default config with --skip-postgres."
+  if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='sentinelx'" 2>/dev/null | grep -q 1; then
+    die "A sentinelx database already exists but its environment file is missing. Restore the original config before continuing."
+  fi
   log "Generating first-run credentials and PostgreSQL database."
   AGENT_TOKEN="$(openssl rand -hex 32)"
   ADMIN_TOKEN="$(openssl rand -hex 32)"
@@ -117,6 +123,7 @@ if [ ! -f "$ENV_FILE" ]; then
   sudo -u postgres psql -v ON_ERROR_STOP=1 -v db_password="$DB_PASSWORD" <<'SQL'
 SELECT format('CREATE ROLE sentinelx LOGIN PASSWORD %L', :'db_password')
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='sentinelx') \gexec
+ALTER ROLE sentinelx WITH LOGIN PASSWORD :'db_password';
 SELECT format('CREATE DATABASE sentinelx OWNER sentinelx')
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='sentinelx') \gexec
 SQL
