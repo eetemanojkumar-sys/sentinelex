@@ -99,7 +99,7 @@ try {
     $env:SENTINELX_AGENT_TOKEN = [Text.Encoding]::UTF8.GetString($plain)
     $env:SENTINELX_URL = "__CENTRAL_URL__"
     $env:SENTINELX_HOST_ID = $env:COMPUTERNAME
-    $env:SENTINELX_INTERVAL = "30"
+    $env:SENTINELX_INTERVAL = "60"
     __CA_LINE__
     Set-Location "__INSTALL_DIR__\agent"
     $python = "__INSTALL_DIR__\.venv\Scripts\python.exe"
