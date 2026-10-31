@@ -6,7 +6,7 @@ let events = [];
 let selectedHost = "";
 let diskHistory = [];
 let lastDiskHistoryKey = "";
-let selectedServiceHost = "";
+let selectedServiceHost = "";\nlet hostOffset = 0;\nlet hostTotal = 0;\nlet hostSearch = "";\nconst HOST_PAGE_SIZE = 100;
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value ?? "—").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -345,6 +345,9 @@ async function refresh() {
 }
 document.querySelectorAll("[data-view]").forEach(link=>link.addEventListener("click",e=>{e.preventDefault();const name=link.dataset.view;switchView(name);window.history.replaceState(null,"","#"+name);}));
 $("refresh-btn").addEventListener("click",refresh);
+$("host-prev").addEventListener("click",()=>{hostOffset=Math.max(0,hostOffset-HOST_PAGE_SIZE);refresh();});
+$("host-next").addEventListener("click",()=>{hostOffset=Math.min(Math.max(0,hostTotal-HOST_PAGE_SIZE),hostOffset+HOST_PAGE_SIZE);refresh();});
+$("host-search").addEventListener("input",()=>{hostSearch=$("host-search").value.trim();hostOffset=0;refresh();});
 $("event-search").addEventListener("input",renderEvents);
 $("severity-filter").addEventListener("change",renderEvents);
 $("process-host").addEventListener("change",renderProcesses);
