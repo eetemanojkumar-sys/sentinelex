@@ -7,7 +7,9 @@ Initial target: **one Ubuntu EC2 instance**. The first version runs directly on 
 ## Initial features
 
 - CPU, memory, disk utilization and uptime collection
-- Disk usage warnings at 80% and critical alerts at 90%
+- Interactive disk inventory with used/free/total capacity and mount-point selection
+- Disk usage history from stored telemetry, with warning at 80% and critical at 90%
+- Disk alert transition reporting to avoid repeating the same alert every collection cycle
 - New, modified, and deleted file event monitoring in configured directories
 - Detection and SHA-256 inventory of ML model file types (the files are identified only; they are never loaded or executed)
 - Running-process and listening-port inventory
@@ -147,6 +149,7 @@ API documentation is available at `http://127.0.0.1:8000/docs` locally.
 | GET | `/api/v1/hosts` | Latest metrics per host |
 | GET | `/api/v1/events` | Recent events |
 | GET | `/api/v1/summary` | Fleet summary |
+| GET | `/api/v1/disk-history?host_id=...&mountpoint=...&limit=120` | Recent stored disk usage samples for one volume |
 
 ## Detection rules
 
@@ -184,6 +187,6 @@ The built-in dark-mode dashboard is served by FastAPI from the `dashboard/` dire
 - Root URL redirects to the dashboard: `http://127.0.0.1:8000/`
 - API documentation: `http://127.0.0.1:8000/docs`
 
-The dashboard refreshes telemetry every 10 seconds and displays host health, CPU, memory, disk usage, recent events, process inventory, listening ports, and ClamAV status. It uses the existing read-only GET endpoints and does not need a separate frontend build tool.
+The dashboard refreshes telemetry every 10 seconds and displays host health, CPU, memory, recent events, process inventory, listening ports, and ClamAV status. Its Disk monitoring view supports host and mount-point selection, searchable/sortable filesystem inventory, capacity breakdowns, rule-based health states, and a historical usage chart backed by stored telemetry. It uses the existing read-only GET endpoints and does not need a separate frontend build tool.
 
 Keep the API bound to `127.0.0.1` and access it through an SSH tunnel until a TLS reverse proxy and appropriate access controls are configured.
