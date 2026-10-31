@@ -7,8 +7,6 @@ from collectors import windows
 
 class WindowsCollectorTests(unittest.TestCase):
     def test_service_inventory_reports_unavailable_off_windows(self):
-        with patch("collectors.windows.__import__", create=True):
-            pass
         result = windows.windows_services()
         self.assertIn("available", result)
         self.assertIn("items", result)
