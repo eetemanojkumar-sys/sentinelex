@@ -19,6 +19,7 @@
       <nav class="nav">
         <a class="nav-link active" href="#overview" data-view="overview"><span>▦</span> Overview</a>
         <a class="nav-link" href="#hosts" data-view="hosts"><span>▣</span> Hosts</a>
+        <a class="nav-link" href="#disk" data-view="disk"><span>◫</span> Disk monitoring</a>
         <a class="nav-link" href="#events" data-view="events"><span>◉</span> Security events <b id="nav-event-count">—</b></a>
         <a class="nav-link" href="#processes" data-view="processes"><span>⌘</span> Processes</a>
         <a class="nav-link" href="#network" data-view="network"><span>⌁</span> Network ports</a>
@@ -51,6 +52,27 @@
         </div>
 
         <article class="panel"><div class="panel-head"><div><h3>Recent security activity</h3><p>Latest file and system events received by SentinelX</p></div><a href="#events" class="text-link" data-view="events">All events →</a></div><div class="table-wrap"><table><thead><tr><th>EVENT</th><th>HOST</th><th>SEVERITY</th><th>TIME</th></tr></thead><tbody id="overview-events"><tr><td colspan="4" class="empty">Loading events…</td></tr></tbody></table></div></article>
+      </section>
+
+      <section class="view" id="view-disk">
+        <div class="section-intro"><h2>Disk monitoring</h2><p>Inspect filesystem capacity, identify high-usage volumes, and review stored usage history.</p></div>
+        <div class="disk-toolbar">
+          <label>HOST<select id="disk-host" aria-label="Select disk monitoring host"></select></label>
+          <label>MOUNT POINT<select id="disk-mount" aria-label="Select filesystem mount point"></select></label>
+          <label>SEARCH VOLUMES<input id="disk-search" type="search" placeholder="Filter mount points…" aria-label="Search disk volumes"></label>
+          <label>SORT BY<select id="disk-sort" aria-label="Sort disk volumes"><option value="usage-desc">Highest usage</option><option value="usage-asc">Lowest usage</option><option value="mount">Mount point</option></select></label>
+        </div>
+        <div class="metric-grid disk-metric-grid">
+          <article class="metric-card"><div class="metric-head"><span>Volume capacity</span><span class="metric-icon cyan">▤</span></div><div class="metric-value" id="disk-total">—</div><div class="metric-foot" id="disk-volume-label">Selected filesystem</div></article>
+          <article class="metric-card"><div class="metric-head"><span>Used space</span><span class="metric-icon violet">◩</span></div><div class="metric-value" id="disk-used">—</div><div class="meter"><i id="disk-meter"></i></div><div class="metric-foot" id="disk-percent">—</div></article>
+          <article class="metric-card"><div class="metric-head"><span>Available space</span><span class="metric-icon blue">▱</span></div><div class="metric-value" id="disk-free">—</div><div class="metric-foot">Reported free capacity</div></article>
+          <article class="metric-card"><div class="metric-head"><span>Monitored volumes</span><span class="metric-icon amber">▦</span></div><div class="metric-value" id="disk-volume-count">—</div><div class="metric-foot">Mounted filesystems in latest report</div></article>
+        </div>
+        <div class="content-grid disk-content-grid">
+          <article class="panel chart-panel"><div class="panel-head"><div><h3>Disk usage history</h3><p id="disk-history-caption">Stored samples for the selected filesystem</p></div><span class="chart-legend"><i class="legend-cpu"></i> Usage %</span></div><canvas id="disk-history-chart" height="220" aria-label="Historical disk usage chart"></canvas><p class="chart-note">Dashed thresholds: warning at 80%, critical at 90%. History is based on telemetry stored by SentinelX.</p></article>
+          <article class="panel disk-status-panel"><div class="panel-head"><div><h3>Volume health</h3><p>Rule-based capacity assessment</p></div><span id="disk-health-badge" class="disk-health healthy">—</span></div><div class="disk-health-meter"><i id="disk-health-meter"></i></div><div class="disk-breakdown"><div><span>Used</span><strong id="disk-breakdown-used">—</strong></div><div><span>Available</span><strong id="disk-breakdown-free">—</strong></div><div><span>Last report</span><strong id="disk-last-report">—</strong></div></div><div class="notice">A disk-capacity warning indicates low free space. It does not by itself mean the filesystem is damaged or compromised.</div></article>
+        </div>
+        <article class="panel"><div class="panel-head"><div><h3>Filesystem inventory</h3><p>Choose a row to inspect that mount point's capacity and history.</p></div><span class="table-count" id="disk-table-count">—</span></div><div class="table-wrap"><table><thead><tr><th>MOUNT POINT</th><th>USED / TOTAL</th><th>AVAILABLE</th><th>USAGE</th><th>STATUS</th><th>CAPACITY</th></tr></thead><tbody id="disk-table"><tr><td colspan="6" class="empty">Waiting for disk telemetry…</td></tr></tbody></table></div></article>
       </section>
 
       <section class="view" id="view-hosts"><div class="section-intro"><h2>Monitored hosts</h2><p>Host availability and latest system resource readings.</p></div><div id="hosts-grid" class="hosts-grid"><div class="panel empty">Loading hosts…</div></div></section>
