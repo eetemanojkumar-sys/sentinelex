@@ -57,8 +57,8 @@ cat > "$DROPIN/scale.conf" <<'EOF'
 ExecStart=
 ExecStart=/opt/sentinelx/venv/bin/uvicorn server.main:app --host 127.0.0.1 --port 8000 --workers 2
 Environment=SENTINELX_HISTORY_INTERVAL_SECONDS=300
-Environment=DB_POOL_SIZE=10
-Environment=DB_MAX_OVERFLOW=15
+Environment=DB_POOL_SIZE=5
+Environment=DB_MAX_OVERFLOW=5
 Environment=DB_POOL_TIMEOUT=30
 EOF
 
@@ -119,7 +119,7 @@ fi
 
 echo
 echo "SentinelX 1k-fleet central update installed."
-echo "API workers: 2; per-worker DB pool: 10 + 15 overflow"
+echo "API workers: 2; per-worker DB pool: 5 + 5 overflow"
 echo "Latest host snapshot is updated every heartbeat; historical samples are stored at 5-minute intervals."
 echo "Retention: 30 days telemetry, 180 days security events."
 echo "Admin token is stored in $ENV_FILE; do not print or share it."
