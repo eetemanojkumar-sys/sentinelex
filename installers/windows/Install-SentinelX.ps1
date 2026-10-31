@@ -8,6 +8,12 @@ $InstallDir = Join-Path $env:ProgramFiles "SentinelX"
 $DataDir = Join-Path $env:ProgramData "SentinelX"
 $TaskName = "SentinelX-Windows-Agent"
 
+# Stop any previous scheduled instance before replacing its executable files.
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+}
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -115,7 +121,7 @@ Set-Content -Path $RunnerPath -Value $Runner -Encoding UTF8
 & icacls $DataDir /inheritance:r | Out-Null
 & icacls $DataDir /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
 & icacls $InstallDir /inheritance:r | Out-Null
-& icacls $InstallDir /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
+& icacls $InstallDir /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" /T /C | Out-Null
 
 # Test central API reachability using the same certificate bundle before registering the task.
 $HealthTest = @'
