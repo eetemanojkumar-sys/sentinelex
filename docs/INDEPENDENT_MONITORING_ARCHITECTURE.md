@@ -113,7 +113,7 @@ Start with a single configurable retention job and database backups. Validate ac
 
 - Default metric interval: 30 seconds, configurable per host/group; allow slower intervals for low-value endpoints.
 - Use one compressed/batched request per collection cycle; set maximum payload size and request timeout.
-- Retry with exponential backoff and jitter; persist a bounded local queue across restarts.
+- Retry with exponential backoff and jitter; persist a bounded local queue across restarts. The current implementation persists one immutable in-flight batch in a local SQLite outbox and retries it until acknowledged; bounded multi-batch buffering and backoff/jitter remain follow-up work.
 - Enforce per-host and global ingestion limits.
 - Use database connection pooling, indexes, pagination, bounded query windows, and pre-aggregated rollups.
 - Fleet dashboard reads latest snapshots, not a full scan of all historical telemetry.
