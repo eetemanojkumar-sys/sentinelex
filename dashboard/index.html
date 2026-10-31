@@ -9,6 +9,18 @@
   <script src="/dashboard/app.js" defer></script>
 </head>
 <body>
+  <section id="admin-login" class="admin-login-overlay" hidden>
+    <form id="admin-login-form" class="admin-login-card">
+      <div class="brand-mark">S</div>
+      <h2>SentinelX Administrator</h2>
+      <p>Enter your administrator token to access the monitoring dashboard.</p>
+      <label for="admin-token">Administrator token</label>
+      <input id="admin-token" type="password" autocomplete="current-password" required placeholder="Enter admin token">
+      <p id="admin-login-error" class="admin-login-error" aria-live="polite"></p>
+      <button type="submit">Sign in</button>
+    </form>
+  </section>
+
   <div class="app-shell">
     <aside class="sidebar">
       <a class="brand" href="/dashboard/" aria-label="SentinelX home">

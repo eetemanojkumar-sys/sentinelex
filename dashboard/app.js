@@ -16,13 +16,18 @@ let serverHistory = [];
 const HOST_PAGE_SIZE = 100;
 
 const $ = (id) => document.getElementById(id);
+function showAdminLogin(message = "") {
+  const overlay = $("admin-login");
+  if (!overlay) return;
+  overlay.hidden = false;
+  $("admin-login-error").textContent = message;
+  $("admin-token").focus();
+}
 function adminHeaders() {
-  let token = sessionStorage.getItem("sentinelx_admin_token") || "";
+  const token = sessionStorage.getItem("sentinelx_admin_token") || "";
   if (!token) {
-    token = window.prompt("Enter SentinelX administrator token:");
-    if (!token) throw new Error("Administrator authentication is required");
-    sessionStorage.setItem("sentinelx_admin_token", token.trim());
-    token = token.trim();
+    showAdminLogin();
+    throw new Error("Administrator login required");
   }
   return {"Accept":"application/json", "Authorization":"Bearer " + token};
 }
@@ -53,6 +58,10 @@ const isOnline = (lastSeen) => lastSeen && (Date.now() - new Date(lastSeen).getT
 
 async function getJson(path) {
   const response = await fetch(API + path, {headers: adminHeaders(), cache:"no-store"});
+  if (response.status === 401) {
+    sessionStorage.removeItem("sentinelx_admin_token");
+    showAdminLogin("Invalid or expired token. Please sign in again.");
+  }
   if (!response.ok) throw new Error(path + " returned HTTP " + response.status);
   return response.json();
 }
@@ -60,6 +69,10 @@ async function loadHostPage() {
   const params = new URLSearchParams({limit:String(HOST_PAGE_SIZE),offset:String(hostOffset)});
   if (hostSearch) params.set("search",hostSearch);
   const response = await fetch(API + "/api/v1/hosts?" + params.toString(), {headers:adminHeaders(),cache:"no-store"});
+  if (response.status === 401) {
+    sessionStorage.removeItem("sentinelx_admin_token");
+    showAdminLogin("Invalid or expired token. Please sign in again.");
+  }
   if (!response.ok) throw new Error("Host inventory returned HTTP " + response.status);
   hostTotal = Number(response.headers.get("X-Total-Count") || 0);
   hosts = await response.json();
@@ -516,5 +529,16 @@ $("disk-sort").addEventListener("change",renderDiskMonitoring);
 $("disk-table").addEventListener("click",event=>{const row=event.target.closest("[data-mount]");if(!row)return;$("disk-mount").value=row.dataset.mount;renderDiskMonitoring();loadDiskHistory();});
 $("disk-table").addEventListener("keydown",event=>{if(event.key!=="Enter"&&event.key!==" ")return;const row=event.target.closest("[data-mount]");if(!row)return;event.preventDefault();$("disk-mount").value=row.dataset.mount;renderDiskMonitoring();loadDiskHistory();});
 window.addEventListener("resize",()=>{drawChart();drawDiskHistoryChart();drawServerHistory();});
-refresh();
+$("admin-login-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const token = $("admin-token").value.trim();
+  if (!token) return;
+  sessionStorage.setItem("sentinelx_admin_token", token);
+  $("admin-token").value = "";
+  $("admin-login").hidden = true;
+  $("admin-login-error").textContent = "";
+  await refresh();
+});
+if (sessionStorage.getItem("sentinelx_admin_token")) refresh();
+else showAdminLogin();
 setInterval(refresh,REFRESH_MS);
