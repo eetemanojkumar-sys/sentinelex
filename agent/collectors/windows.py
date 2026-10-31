@@ -2,6 +2,8 @@
 import json
 import subprocess
 
+import psutil
+
 from collectors.common import collect_base_metrics
 
 
@@ -36,7 +38,7 @@ def defender_status():
 def windows_services(limit=250):
     """Return a bounded Windows service inventory; unavailable values stay explicit."""
     services = []
-    iterator = getattr(__import__("psutil"), "win_service_iter", None)
+    iterator = getattr(psutil, "win_service_iter", None)
     if iterator is None:
         return {"available": False, "items": []}
     try:
@@ -53,7 +55,7 @@ def windows_services(limit=250):
                     "username": item.get("username"),
                     "pid": item.get("pid"),
                 })
-            except (OSError, __import__("psutil").AccessDenied):
+            except (OSError, psutil.AccessDenied):
                 continue
         return {"available": True, "items": services}
     except (OSError, __import__("psutil").AccessDenied):
