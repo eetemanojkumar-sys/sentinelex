@@ -18,7 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.sql import over
 
-BOOTSTRAP_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
+BOOTSTRAP_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")\nADMIN_TOKEN = os.getenv("SENTINELX_ADMIN_TOKEN", "")\nHISTORY_INTERVAL_SECONDS = max(60, int(os.getenv("SENTINELX_HISTORY_INTERVAL_SECONDS", "300")))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sentinelx.db")
 if not BOOTSTRAP_TOKEN:
     raise RuntimeError("SENTINELX_AGENT_TOKEN must be configured")
@@ -159,7 +159,7 @@ def health():
         database = "unavailable"
     if database != "ok":
         raise HTTPException(status_code=503, detail="Database unavailable")
-    return {"status": "ok", "service": "sentinelx-central", "version": "0.2.0", "database": database}
+    return {"status": "ok", "service": "sentinelx-central", "version": "0.3.0", "database": database}
 
 
 @app.post("/api/v1/agents/enroll", status_code=201)
@@ -209,7 +209,21 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
         raise HTTPException(status_code=403, detail="Host identity does not match enrolled agent")
 
     now = utcnow()
-    db.add(Telemetry(host_id=payload.host_id, received_at=now, metrics=payload.metrics))
+    latest_row = db.get(HostLatest, payload.host_id)
+    if latest_row:
+        latest_row.received_at = now
+        latest_row.metrics = payload.metrics
+    else:
+        db.add(HostLatest(host_id=payload.host_id, received_at=now, metrics=payload.metrics))
+
+    # Keep a lower-frequency historical sample while updating the live snapshot
+    # on every heartbeat. This limits write amplification for large fleets.
+    last_history = db.scalar(
+        select(func.max(Telemetry.received_at)).where(Telemetry.host_id == payload.host_id)
+    )
+    if last_history is None or (now - last_history).total_seconds() >= HISTORY_INTERVAL_SECONDS:
+        db.add(Telemetry(host_id=payload.host_id, received_at=now, metrics=payload.metrics))
+
     if payload.events:
         db.add_all([
             SecurityEvent(
@@ -229,27 +243,15 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
 
 
 @app.get("/api/v1/hosts")
-def hosts(response: Response, limit: int = Query(default=200, ge=1, le=500),
+def hosts(response: Response, limit: int = Query(default=100, ge=1, le=250),
           offset: int = Query(default=0, ge=0), search: str | None = None,
           db: Session = Depends(db_session)):
-    latest = (
-        select(
-            Telemetry.id.label("id"),
-            Telemetry.host_id.label("host_id"),
-            Telemetry.received_at.label("received_at"),
-            Telemetry.metrics.label("metrics"),
-            func.row_number().over(
-                partition_by=Telemetry.host_id,
-                order_by=Telemetry.received_at.desc(),
-            ).label("rn"),
-        ).subquery()
-    )
-    query = select(latest).where(latest.c.rn == 1)
+    query = select(HostLatest)
     if search:
-        query = query.where(latest.c.host_id.ilike(f"%{search[:100]}%"))
+        query = query.where(HostLatest.host_id.ilike(f"%{search[:100]}%"))
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    rows = db.execute(
-        query.order_by(latest.c.host_id).offset(offset).limit(limit)
+    rows = db.scalars(
+        query.order_by(HostLatest.host_id).offset(offset).limit(limit)
     ).all()
     response.headers["X-Total-Count"] = str(total)
     response.headers["X-Limit"] = str(limit)
@@ -258,72 +260,19 @@ def hosts(response: Response, limit: int = Query(default=200, ge=1, le=500),
         "host_id": row.host_id,
         "last_seen": row.received_at,
         "metrics": row.metrics,
-    } for row in rows]
-
-
-@app.get("/api/v1/events")
-def events(response: Response, limit: int = Query(default=100, ge=1, le=500),
-           offset: int = Query(default=0, ge=0), host_id: str | None = None,
-           severity: str | None = None, db: Session = Depends(db_session)):
-    query = select(SecurityEvent)
-    if host_id:
-        query = query.where(SecurityEvent.host_id == host_id)
-    if severity:
-        if severity not in {"info", "low", "medium", "high", "critical"}:
-            raise HTTPException(status_code=400, detail="Invalid severity")
-        query = query.where(SecurityEvent.severity == severity)
-    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    rows = db.scalars(query.order_by(desc(SecurityEvent.created_at)).offset(offset).limit(limit)).all()
-    response.headers["X-Total-Count"] = str(total)
-    return [{
-        "id": row.id, "host_id": row.host_id, "event_type": row.event_type,
-        "severity": row.severity, "message": row.message,
-        "details": row.details, "created_at": row.created_at,
-    } for row in rows]
-
-
-@app.get("/api/v1/disk-history")
-def disk_history(host_id: str, mountpoint: str, limit: int = Query(default=60, ge=2, le=500),
-                 db: Session = Depends(db_session)):
-    rows = db.scalars(
-        select(Telemetry).where(Telemetry.host_id == host_id)
-        .order_by(desc(Telemetry.received_at)).limit(limit)
-    ).all()
-    samples = []
-    for row in reversed(rows):
-        disk_data = (row.metrics or {}).get("disk", {})
-        volume = disk_data.get(mountpoint) if isinstance(disk_data, dict) else None
-        if isinstance(volume, dict) and volume.get("percent") is not None:
-            samples.append({
-                "recorded_at": row.received_at, "percent": volume.get("percent"),
-                "total_bytes": volume.get("total_bytes"), "used_bytes": volume.get("used_bytes"),
-                "free_bytes": volume.get("free_bytes"),
-            })
-    return {"host_id": host_id, "mountpoint": mountpoint, "samples": samples}
-
-
-@app.get("/api/v1/summary")
+    } for row in rows]@app.get("/api/v1/summary")
 def summary(db: Session = Depends(db_session)):
-    host_count = db.scalar(select(func.count(func.distinct(Telemetry.host_id)))) or 0
-    latest = (
-        select(
-            Telemetry.host_id.label("host_id"),
-            Telemetry.metrics.label("metrics"),
-            Telemetry.received_at.label("last_seen"),
-            func.row_number().over(
-                partition_by=Telemetry.host_id,
-                order_by=Telemetry.received_at.desc(),
-            ).label("rn"),
-        ).subquery()
-    )
-    latest_hosts = db.execute(
-        select(latest).where(latest.c.rn == 1).order_by(desc(latest.c.last_seen)).limit(20)
+    host_count = db.scalar(select(func.count()).select_from(HostLatest)) or 0
+    latest_hosts = db.scalars(
+        select(HostLatest).order_by(desc(HostLatest.received_at)).limit(20)
     ).all()
-    recent = db.scalars(select(SecurityEvent).order_by(desc(SecurityEvent.created_at)).limit(10)).all()
+    recent = db.scalars(
+        select(SecurityEvent).order_by(desc(SecurityEvent.created_at)).limit(10)
+    ).all()
     return {
         "monitored_hosts": host_count,
         "latest_hosts": [{
-            "host_id": row.host_id, "metrics": row.metrics, "last_seen": row.last_seen
+            "host_id": row.host_id, "metrics": row.metrics, "last_seen": row.received_at
         } for row in latest_hosts],
         "recent_events": [{
             "host_id": event.host_id, "severity": event.severity,
@@ -331,23 +280,3 @@ def summary(db: Session = Depends(db_session)):
             "created_at": event.created_at,
         } for event in recent],
     }
-
-
-@app.get("/api/v1/admin/agents")
-def list_agents(db: Session = Depends(db_session)):
-    rows = db.scalars(select(AgentCredential).order_by(AgentCredential.created_at.desc()).limit(1000)).all()
-    return [{
-        "agent_id": row.agent_id, "host_id": row.host_id, "hostname": row.hostname,
-        "os_name": row.os_name, "created_at": row.created_at,
-        "last_seen": row.last_seen, "revoked": row.revoked,
-    } for row in rows]
-
-
-@app.post("/api/v1/admin/agents/{agent_id}/revoke")
-def revoke_agent(agent_id: str, db: Session = Depends(db_session)):
-    credential = db.scalar(select(AgentCredential).where(AgentCredential.agent_id == agent_id))
-    if not credential:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    credential.revoked = True
-    db.commit()
-    return {"revoked": True, "agent_id": agent_id}
