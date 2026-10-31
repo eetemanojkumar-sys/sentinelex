@@ -28,9 +28,10 @@ class LinuxCollectorTests(unittest.TestCase):
         )
         metrics = linux.collect_metrics(lambda *args, **kwargs: None, {})
         expected = {
-            "hostname", "platform", "boot_time", "uptime_seconds",
-            "cpu_percent", "memory", "disk", "temperatures",
-            "process_count", "processes", "listening_ports", "antivirus",
+            "hostname", "platform", "os", "boot_time", "uptime_seconds",
+            "cpu_percent", "cpu_count_logical", "memory", "swap", "disk",
+            "network_interfaces", "temperatures", "process_count",
+            "processes", "listening_ports", "antivirus",
         }
         self.assertEqual(set(metrics), expected)
         self.assertEqual(metrics["cpu_percent"], 3.5)
