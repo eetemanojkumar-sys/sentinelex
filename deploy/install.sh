@@ -90,6 +90,9 @@ if [ -d "$APP_DIR" ] || [ -f "$ENV_FILE" ]; then
   log "Existing installation found; backing up before changes."
   backup_existing
 fi
+if [ ! -f "$ENV_FILE" ] && [ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+  die "Application files exist but the environment file is missing. Restore /etc/sentinelx/sentinelx.env first; refusing to create a new database identity."
+fi
 if [ "$MODE" = repair ] && [ ! -f "$ENV_FILE" ]; then die "No existing config; use install mode."; fi
 
 log "Installing operating-system dependencies."
@@ -114,9 +117,6 @@ if [ "$MODE" != repair ]; then
 fi
 
 if [ ! -f "$ENV_FILE" ]; then
-  if [ -d "$APP_DIR" ] && [ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
-    die "Application files exist but the environment file is missing. Restore /etc/sentinelx/sentinelx.env first; refusing to create a new database identity."
-  fi
   [ "$SKIP_POSTGRES" -eq 0 ] || die "Cannot create default config with --skip-postgres."
   if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='sentinelx'" 2>/dev/null | grep -q 1; then
     die "A sentinelx database already exists but its environment file is missing. Restore the original config before continuing."
