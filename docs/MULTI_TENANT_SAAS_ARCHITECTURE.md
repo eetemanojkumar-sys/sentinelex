@@ -160,3 +160,17 @@ Create at least Tenant A and Tenant B in automated tests:
 7. Test two-tenant isolation before enabling customer onboarding.
 
 **Release gate:** No public multi-customer launch until tenant-isolation tests, authenticated reads/writes, per-host credential revocation, TLS, rate limits, backups, and audit logging pass.
+
+## 12. Implementation progress (2026-11-01)
+
+Initial code foundation committed on `cross-platform-v1`:
+
+- `server/main.py`: additive SQLAlchemy models for tenants, users, memberships, browser sessions, enrollment tokens, per-host agent credential metadata, and audit events. Existing telemetry tables/routes are not yet tenant-scoped.
+- `server/security.py`: PBKDF2-SHA256 password hashing with per-password salts, constant-time verification, high-entropy opaque secret generation, and SHA-256 token digest helper.
+- `server/test_security.py`: unit tests for password round-trip, unique salts, password length policy, and secret generation/hash behavior.
+
+**Not yet implemented:** registration/login routes, session-cookie handling, tenant authorization dependencies, tenant_id on existing host/telemetry/event tables, migrations/backfill, one-time enrollment exchange, per-host credential verification in ingestion, tenant-aware dashboard queries, or cross-tenant integration tests.
+
+The new SQLAlchemy models are additive and are created by the existing `Base.metadata.create_all` when the API starts. This does not migrate or scope existing tables. Do not restart or deploy production merely to activate this development schema. Before production migration, introduce reviewed Alembic migrations and backfill the existing installation into an initial tenant.
+
+**Security status:** not multi-customer launch-ready. Existing API read routes are currently unscoped; the shared agent token remains a prototype. Do not expose public registration or customer data until all tenant authorization and isolation tests pass.
