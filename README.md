@@ -17,6 +17,8 @@ The current development work is on `cross-platform-v1`. The running production d
 - Running-process and listening-port inventory
 - Basic ClamAV executable and daemon status checks
 - Central FastAPI ingestion API and PostgreSQL persistence
+- SQLite-backed local telemetry outbox that retains the exact unacknowledged batch across agent restarts
+- Stable batch IDs and server-side idempotency to prevent duplicate metric/event writes after a lost response
 - Shared-token authentication for the initial single-host deployment
 
 ## Independent monitoring architecture
@@ -109,7 +111,7 @@ sudo chown root:sentinelx /etc/sentinelx/sentinelx.env
 sudo chmod 0640 /etc/sentinelx/sentinelx.env
 ```
 
-Generate secrets yourself; never commit real credentials. Configure PostgreSQL role/database to match the DSN above. Example:
+Generate secrets yourself; never commit real credentials. Configure PostgreSQL role/database to match the DSN above. The agent's durable outbox defaults to `~/.sentinelx/outbox.sqlite3`; set `SENTINELX_QUEUE_PATH` to choose another protected local path. The outbox contains collected telemetry until the central API acknowledges it, so protect it with OS file permissions. Example:
 
 ```bash
 sudo -u postgres psql
@@ -174,6 +176,7 @@ These are monitoring indicators, not proof of compromise. The first implementati
 
 - Keep the API bound to localhost until a TLS reverse proxy and firewall policy are configured.
 - Use a long, unique agent token; rotate it if exposed. The first version uses one shared token, suitable only for controlled single-host testing.
+- The local SQLite outbox retains one exact batch until acknowledgement; the server records batch IDs for idempotent ingestion. This is a reliability foundation, not yet a bounded multi-batch spool or per-host credential enrollment system.
 - Avoid watching pseudo-filesystems such as `/proc`, `/sys`, and `/dev`; do not watch high-churn or huge trees without tuning.
 - File events can be missed during downtime or when Linux inotify limits are reached. A later integrity-baseline scan can complement event watching.
 - Some process, port, and system data require elevated permissions. Run with the least privileges that meet the monitoring requirements.
