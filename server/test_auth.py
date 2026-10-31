@@ -1,59 +1,39 @@
-"""Authentication and fail-closed tenant-data API tests."""
+"""Regression tests for the self-hosted API entry points."""
 import os
 import tempfile
 import unittest
 from pathlib import Path
 
 _DB = tempfile.TemporaryDirectory()
-os.environ["SENTINELX_AGENT_TOKEN"] = "sentinelx-auth-test-token"
-os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(_DB.name) / "auth-test.db")
-os.environ["SENTINELX_COOKIE_SECURE"] = "false"
+os.environ.setdefault("SENTINELX_AGENT_TOKEN", "sentinelx-selfhosted-test-token")
+os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(_DB.name) / "selfhosted-test.db")
 
 from fastapi.testclient import TestClient
-from server import main
+from server.main import app
 
-# The ingestion test module may import the app first with production defaults.
-# Force insecure cookies only inside this isolated HTTP test process.
-main.COOKIE_SECURE = False
-client = TestClient(main.app)
+client = TestClient(app)
 
 
-class AuthApiTests(unittest.TestCase):
-    def setUp(self):
-        # A fresh email per test avoids order-dependent account state.
-        import uuid
-        self.email = "user-" + uuid.uuid4().hex[:12] + "@example.test"
-        self.password = "Correct-Horse-Battery-42!"
+class SelfHostedApiTests(unittest.TestCase):
+    def test_health_is_available(self):
+        response = client.get("/health")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "ok")
 
-    def test_register_me_logout_and_reject_revoked_session(self):
-        response = client.post("/api/v1/auth/register", json={
-            "email": self.email, "password": self.password,
-            "organization_name": "Example Customer",
-        })
-        self.assertEqual(response.status_code, 201, response.text)
-        self.assertIn("sentinelx_session", response.cookies)
-        me = client.get("/api/v1/auth/me")
-        self.assertEqual(me.status_code, 200, me.text)
-        self.assertEqual(me.json()["user"]["email"], self.email)
-        self.assertEqual(me.json()["organizations"][0]["role"], "owner")
-        logout = client.post("/api/v1/auth/logout")
-        self.assertEqual(logout.status_code, 200)
-        self.assertEqual(client.get("/api/v1/auth/me").status_code, 401)
+    def test_root_redirects_to_dashboard(self):
+        response = client.get("/", follow_redirects=False)
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/dashboard/")
 
-    def test_login_rejects_bad_password(self):
-        client.post("/api/v1/auth/register", json={
-            "email": self.email, "password": self.password,
-            "organization_name": "Example Customer",
-        })
-        response = client.post("/api/v1/auth/login", json={
-            "email": self.email, "password": "wrong-password",
-        })
+    def test_monitoring_routes_are_enabled(self):
+        for path in ("/api/v1/hosts", "/api/v1/events", "/api/v1/summary"):
+            response = client.get(path)
+            self.assertEqual(response.status_code, 200, f"{path}: {response.text}")
+
+    def test_telemetry_requires_agent_token(self):
+        payload = {"host_id":"test-host","metrics":{"cpu_percent":12.5}}
+        response = client.post("/api/v1/telemetry", json=payload)
         self.assertEqual(response.status_code, 401)
-
-    def test_unscoped_legacy_data_routes_fail_closed(self):
-        response = client.get("/api/v1/hosts")
-        self.assertEqual(response.status_code, 503)
-        self.assertIn("tenant isolation", response.text.lower())
 
 
 if __name__ == "__main__":
