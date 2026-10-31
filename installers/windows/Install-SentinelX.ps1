@@ -3,7 +3,7 @@
 $ErrorActionPreference = "Stop"
 
 $Repo = "https://github.com/eetemanojkumar-sys/sentinelex"
-$Branch = "dashboard-single-command-install"
+$Branch = "scale-1000-servers"
 $InstallDir = Join-Path $env:ProgramFiles "SentinelX"
 $DataDir = Join-Path $env:ProgramData "SentinelX"
 $TaskName = "SentinelX-Windows-Agent"
