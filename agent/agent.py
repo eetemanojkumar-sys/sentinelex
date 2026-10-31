@@ -29,6 +29,7 @@ MODEL_EXTENSIONS = {
 }
 events = []
 event_lock = Lock()
+disk_alert_states = {}
 
 
 def queue_event(event_type, severity, message, details=None):
@@ -58,8 +59,17 @@ def safe_hash(path):
 
 
 class ChangeHandler(FileSystemEventHandler):
+    EXCLUDED_PATHS = [Path("/opt/sentinelx").resolve()]
+
+    def is_excluded(self, path):
+        resolved = Path(path).resolve()
+        return any(
+            resolved == excluded or excluded in resolved.parents
+            for excluded in self.EXCLUDED_PATHS
+        )
+
     def on_created(self, event):
-        if event.is_directory:
+        if event.is_directory or self.is_excluded(event.src_path):
             return
         path = Path(event.src_path)
         if path.suffix.lower() in MODEL_EXTENSIONS:
@@ -71,7 +81,7 @@ class ChangeHandler(FileSystemEventHandler):
             queue_event("new_file", "info", f"New file detected: {path}", {"path": str(path)})
 
     def on_modified(self, event):
-        if event.is_directory:
+        if event.is_directory or self.is_excluded(event.src_path):
             return
         path = Path(event.src_path)
         if path.suffix.lower() in MODEL_EXTENSIONS:
@@ -83,7 +93,7 @@ class ChangeHandler(FileSystemEventHandler):
             queue_event("file_modified", "info", f"File modified: {path}", {"path": str(path)})
 
     def on_deleted(self, event):
-        if not event.is_directory:
+        if not event.is_directory and not self.is_excluded(event.src_path):
             queue_event("file_deleted", "low", f"File deleted: {event.src_path}",
                         {"path": event.src_path})
 
@@ -105,24 +115,36 @@ def antivirus_status():
 def collect_metrics():
     disk = {}
     for partition in psutil.disk_partitions(all=False):
+        mountpoint = partition.mountpoint
+        # Snap loopback images are read-only package mounts, not useful capacity alerts.
+        if partition.fstype.lower() == "squashfs" or mountpoint == "/snap" or mountpoint.startswith("/snap/"):
+            continue
         try:
-            usage = psutil.disk_usage(partition.mountpoint)
+            usage = psutil.disk_usage(mountpoint)
         except OSError:
             continue
-        disk[partition.mountpoint] = {
+        disk[mountpoint] = {
             "total_bytes": usage.total,
             "used_bytes": usage.used,
             "free_bytes": usage.free,
             "percent": usage.percent,
         }
-        if usage.percent >= 90:
-            queue_event("disk_critical", "critical",
-                        f"Disk usage is {usage.percent}% on {partition.mountpoint}",
-                        {"mountpoint": partition.mountpoint, "percent": usage.percent})
-        elif usage.percent >= 80:
-            queue_event("disk_warning", "medium",
-                        f"Disk usage is {usage.percent}% on {partition.mountpoint}",
-                        {"mountpoint": partition.mountpoint, "percent": usage.percent})
+        state = "critical" if usage.percent >= 90 else "warning" if usage.percent >= 80 else "healthy"
+        previous_state = disk_alert_states.get(mountpoint, "healthy")
+        if state != previous_state:
+            if state == "critical":
+                queue_event("disk_critical", "critical",
+                            f"Disk usage is {usage.percent}% on {mountpoint}",
+                            {"mountpoint": mountpoint, "percent": usage.percent})
+            elif state == "warning":
+                queue_event("disk_warning", "medium",
+                            f"Disk usage is {usage.percent}% on {mountpoint}",
+                            {"mountpoint": mountpoint, "percent": usage.percent})
+            elif previous_state != "healthy":
+                queue_event("disk_recovered", "info",
+                            f"Disk usage returned to the healthy range on {mountpoint}",
+                            {"mountpoint": mountpoint, "percent": usage.percent})
+            disk_alert_states[mountpoint] = state
 
     processes = []
     for proc in psutil.process_iter(
