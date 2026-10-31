@@ -104,7 +104,7 @@ else:
 
 app = FastAPI(
     title="SentinelX Central API",
-    version="0.2.0",
+    version="0.3.0",
     description="Scalable rule-based telemetry control plane for Linux and Windows fleets.",
 )
 DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
