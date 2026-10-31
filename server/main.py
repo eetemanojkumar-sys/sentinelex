@@ -35,6 +35,19 @@ class Telemetry(Base):
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class Host(Base):
+    """Latest identity and lifecycle metadata for each endpoint."""
+    __tablename__ = "hosts"
+    host_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    hostname: Mapped[str] = mapped_column(String(255), default="")
+    platform: Mapped[str] = mapped_column(String(100), default="")
+    os_release: Mapped[str] = mapped_column(String(255), default="")
+    architecture: Mapped[str] = mapped_column(String(100), default="")
+    agent_version: Mapped[str] = mapped_column(String(50), default="")
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    last_sequence: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class SecurityEvent(Base):
     __tablename__ = "security_events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -72,10 +85,20 @@ class EventIn(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentInfo(BaseModel):
+    version: str = Field(default="", max_length=50)
+    platform: str = Field(default="", max_length=100)
+    architecture: str = Field(default="", max_length=100)
+
+
 class TelemetryIn(BaseModel):
     host_id: str = Field(min_length=1, max_length=255)
     metrics: dict[str, Any]
     events: list[EventIn] = Field(default_factory=list, max_length=500)
+    schema_version: int = Field(default=1, ge=1, le=100)
+    agent: AgentInfo = Field(default_factory=AgentInfo)
+    collected_at: datetime | None = None
+    sequence: int = Field(default=0, ge=0)
 
 
 def db_session():
@@ -100,7 +123,21 @@ def health():
 def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None),
            db: Session = Depends(db_session)):
     verify_agent(x_agent_token)
+    now = datetime.now(timezone.utc)
     db.add(Telemetry(host_id=payload.host_id, metrics=payload.metrics))
+    host = db.get(Host, payload.host_id)
+    identity = payload.metrics.get("identity", {}) if isinstance(payload.metrics, dict) else {}
+    identity = identity if isinstance(identity, dict) else {}
+    if host is None:
+        host = Host(host_id=payload.host_id)
+        db.add(host)
+    host.hostname = str(identity.get("hostname") or payload.host_id)[:255]
+    host.platform = str(payload.agent.platform or identity.get("system") or payload.metrics.get("platform") or "")[:100]
+    host.os_release = str(identity.get("release") or identity.get("version") or "")[:255]
+    host.architecture = str(payload.agent.architecture or identity.get("machine") or "")[:100]
+    host.agent_version = payload.agent.version[:50]
+    host.last_seen = now
+    host.last_sequence = max(host.last_sequence or 0, payload.sequence)
     for event in payload.events:
         db.add(SecurityEvent(
             host_id=payload.host_id,
@@ -125,6 +162,11 @@ def hosts(db: Session = Depends(db_session)):
                 "last_seen": row.received_at,
                 "metrics": row.metrics,
             }
+    registry = {row.host_id: row for row in db.scalars(select(Host)).all()}
+    for host_id, item in latest.items():
+        registered = registry.get(host_id)
+        if registered:
+            item.update({"hostname": registered.hostname, "platform": registered.platform or item["metrics"].get("platform", ""), "os_release": registered.os_release, "architecture": registered.architecture, "agent_version": registered.agent_version, "last_sequence": registered.last_sequence})
     return list(latest.values())
 
 
