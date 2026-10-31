@@ -27,6 +27,12 @@ Additional Linux agents ------/                     +-> Dashboard
 
 The central API is normally bound to `127.0.0.1:8000` behind a TLS reverse proxy. The dashboard is served at `/dashboard/`.
 
+Update the dashboard on an existing central Ubuntu deployment with one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/eetemanojkumar-sys/sentinelex/dashboard-single-command-install/installers/linux/update-dashboard.sh | sudo bash
+```
+
 ## Dashboard
 
 - Dashboard: `https://CENTRAL-HOST:8443/dashboard/` (adjust host/port for your deployment)
