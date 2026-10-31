@@ -1,6 +1,7 @@
 const API = "";
 const REFRESH_MS = 10000;
-const resourceHistory = [];
+let resourceHistory = [];
+let resourceHistoryKey = "";
 let hosts = [];
 let events = [];
 let selectedHost = "";
@@ -66,6 +67,31 @@ async function loadHostPage() {
   if ($("host-prev")) $("host-prev").disabled = hostOffset <= 0;
   if ($("host-next")) $("host-next").disabled = hostOffset + HOST_PAGE_SIZE >= hostTotal;
 }
+async function loadResourceHistory() {
+  const hostId = hosts[0]?.host_id;
+  if (!hostId) { resourceHistory = []; drawChart(); return; }
+  const key = hostId;
+  try {
+    const [cpuData, memoryData] = await Promise.all([
+      getJson("/api/v1/metrics/history?host_id=" + encodeURIComponent(hostId) + "&metric=cpu&limit=120"),
+      getJson("/api/v1/metrics/history?host_id=" + encodeURIComponent(hostId) + "&metric=memory&limit=120")
+    ]);
+    if (hosts[0]?.host_id !== key) return;
+    const points = new Map();
+    (cpuData.samples || []).forEach(item => points.set(item.recorded_at, {cpu: Number(item.value) || 0, memory: 0}));
+    (memoryData.samples || []).forEach(item => {
+      const point = points.get(item.recorded_at) || {cpu: 0, memory: 0};
+      point.memory = Number(item.value) || 0;
+      points.set(item.recorded_at, point);
+    });
+    resourceHistory = Array.from(points.entries()).sort((a,b)=>new Date(a[0])-new Date(b[0])).map(item=>item[1]).slice(-120);
+    resourceHistoryKey = key;
+    drawChart();
+  } catch (error) {
+    console.warn("SentinelX resource history unavailable:", error);
+  }
+}
+
 function setConnection(ok, message) {
   $("connection-dot").parentElement.classList.toggle("offline", !ok);
   $("connection-label").textContent = message;
@@ -82,9 +108,10 @@ function renderOverview(summary) {
   $("cpu-meter").style.width = (Number.isFinite(cpu) ? Math.max(0,Math.min(100,cpu)) : 0) + "%";
   $("memory-meter").style.width = (Number.isFinite(mem) ? Math.max(0,Math.min(100,mem)) : 0) + "%";
   $("memory-foot").textContent = latest.memory ? bytes(latest.memory.available_bytes) + " available" : "Latest host sample";
-  const point = {cpu: Number.isFinite(cpu) ? cpu : 0, memory: Number.isFinite(mem) ? mem : 0};
-  resourceHistory.push(point);
-  if (resourceHistory.length > 30) resourceHistory.shift();
+  if (resourceHistoryKey !== (hosts[0]?.host_id || "")) {
+    resourceHistory = [];
+    resourceHistoryKey = hosts[0]?.host_id || "";
+  }
   drawChart();
   $("host-preview").innerHTML = hosts.length ? hosts.slice(0,4).map(host => {
     const online = isOnline(host.last_seen);
@@ -360,6 +387,7 @@ async function refresh() {
     await loadHostPage();
     events=Array.isArray(eventData)?eventData:[];
     renderOverview(summaryData||{});
+    await loadResourceHistory();
     renderHosts(); renderEvents(); fillHostSelects(); renderProcesses(); renderNetwork(); renderAntivirus(); renderServices(); renderDiskMonitoring();
     const diskSelection=currentDiskSelection(), diskKey=diskSelection.hostId+"|"+diskSelection.mount;
     if(document.getElementById("view-disk").classList.contains("active") || diskKey!==lastDiskHistoryKey)loadDiskHistory();
