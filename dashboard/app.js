@@ -283,9 +283,10 @@ function renderAntivirus() {
     const av=host.metrics?.antivirus||{};
     const defender=av.microsoft_defender;
     const state=(v)=>v===true?'<span class="av-ok">Enabled</span>':v===false?'<span class="av-no">Disabled</span>':'<span>Unknown</span>';
+    const availability=(v)=>v===true?'<span class="av-ok">Available</span>':v===false?'<span class="av-no">Unavailable</span>':'<span>Unknown</span>';
     let rows="";
     if(defender){
-      rows='<div class="av-item"><span>Microsoft Defender</span>'+state(defender.available)+'</div>'+
+      rows='<div class="av-item"><span>Microsoft Defender collector</span>'+availability(defender.available)+'</div>'+
         '<div class="av-item"><span>Antivirus protection</span>'+state(defender.antivirus_enabled)+'</div>'+
         '<div class="av-item"><span>Real-time protection</span>'+state(defender.real_time_protection_enabled)+'</div>'+
         '<div class="av-item"><span>Signature updated</span><span>'+esc(defender.signature_last_updated||"Unknown")+'</span></div>';
