@@ -1,0 +1,49 @@
+"""Integration test for authenticated, idempotent telemetry ingestion."""
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+_TEST_DB = tempfile.TemporaryDirectory()
+os.environ["SENTINELX_AGENT_TOKEN"] = "sentinelx-test-token"
+os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(_TEST_DB.name) / "ingestion-test.db")
+
+from server import main
+
+
+class TelemetryIngestionTests(unittest.TestCase):
+    def test_replayed_batch_is_acknowledged_without_duplicate_writes(self):
+        payload = main.TelemetryIn(
+            host_id="test-host-01",
+            batch_id="test-batch-0001",
+            sequence=1,
+            agent=main.AgentInfo(
+                version="test",
+                platform="Linux",
+                architecture="x86_64",
+            ),
+            metrics={"hostname": "test-host", "cpu_percent": 12.5},
+            events=[
+                main.EventIn(
+                    event_type="test_event",
+                    severity="low",
+                    message="Test event",
+                )
+            ],
+        )
+
+        with main.SessionLocal() as db:
+            first = main.ingest(payload, "sentinelx-test-token", db)
+            duplicate = main.ingest(payload, "sentinelx-test-token", db)
+
+            self.assertTrue(first["accepted"])
+            self.assertFalse(first.get("duplicate", False))
+            self.assertTrue(duplicate["accepted"])
+            self.assertTrue(duplicate["duplicate"])
+            self.assertEqual(db.query(main.Telemetry).filter_by(host_id="test-host-01").count(), 1)
+            self.assertEqual(db.query(main.SecurityEvent).filter_by(host_id="test-host-01").count(), 1)
+            self.assertEqual(db.query(main.IngestedBatch).filter_by(host_id="test-host-01").count(), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
