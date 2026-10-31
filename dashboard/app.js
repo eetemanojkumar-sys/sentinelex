@@ -347,3 +347,8 @@ $("disk-table").addEventListener("keydown",event=>{if(event.key!=="Enter"&&event
 window.addEventListener("resize",()=>{drawChart();drawDiskHistoryChart();});
 refresh();
 setInterval(refresh,REFRESH_MS);
+// Local administrator session controls.
+document.getElementById("logout-btn")?.addEventListener("click", async () => {
+  try { await fetch("/api/v1/auth/logout", {method:"POST", credentials:"same-origin"}); }
+  finally { location.replace("/login"); }
+});
