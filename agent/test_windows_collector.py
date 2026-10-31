@@ -1,15 +1,33 @@
 """Windows collector contract tests; safe to run on non-Windows CI too."""
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import psutil
 from collectors import windows
 
 
 class WindowsCollectorTests(unittest.TestCase):
     def test_service_inventory_reports_unavailable_off_windows(self):
-        result = windows.windows_services()
-        self.assertIn("available", result)
-        self.assertIn("items", result)
+        if not hasattr(psutil, "win_service_iter"):
+            result = windows.windows_services()
+            self.assertFalse(result["available"])
+            self.assertEqual(result["items"], [])
+
+    def test_service_inventory_maps_windows_service_fields(self):
+        service = SimpleNamespace(as_dict=lambda: {
+            "name": "Spooler",
+            "display_name": "Print Spooler",
+            "status": "running",
+            "start_type": "automatic",
+            "username": "LocalSystem",
+            "pid": 123,
+        })
+        with patch.object(psutil, "win_service_iter", return_value=[service], create=True):
+            result = windows.windows_services()
+        self.assertTrue(result["available"])
+        self.assertEqual(result["items"][0]["name"], "Spooler")
+        self.assertEqual(result["items"][0]["status"], "running")
 
     @patch("collectors.windows.subprocess.run")
     def test_defender_status_parses_powershell_json(self, run):
