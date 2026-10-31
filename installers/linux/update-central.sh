@@ -45,7 +45,7 @@ fi
 # Create an admin credential once. It is stored only in the root-protected env file.
 if ! grep -q '^SENTINELX_ADMIN_TOKEN=' "$ENV_FILE"; then
   printf '\nSENTINELX_ADMIN_TOKEN=%s\n' "$(openssl rand -hex 32)" >> "$ENV_FILE"
-  chmod 0600 "$ENV_FILE"
+  chown root:sentinelx "$ENV_FILE"\n  chmod 0640 "$ENV_FILE"
 fi
 
 # Two API workers are a conservative starting point for a 2-vCPU central EC2.
