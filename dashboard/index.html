@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#070d18">
-  <meta name="description" content="SentinelX cross-platform infrastructure monitoring and security operations console.">
   <title>SentinelX | Enterprise Operations Center</title>
   <link rel="stylesheet" href="/dashboard/styles.css">
   <link rel="stylesheet" href="/dashboard/enterprise.css">
@@ -93,6 +92,7 @@
 
       <section class="view" id="view-services"><div class="section-intro"><h2>Windows services</h2><p>Service state, startup mode and service account reported by Windows agents.</p></div><div class="toolbar"><select id="service-host" aria-label="Select Windows host"></select><input id="service-search" type="search" placeholder="Search service name or display name…" aria-label="Search services"></div><article class="panel"><div class="panel-head"><div><h3>Service inventory</h3><p id="service-subtitle">Select a Windows host to inspect its service snapshot.</p></div><span class="table-count" id="service-count">—</span></div><div class="table-wrap"><table><thead><tr><th>SERVICE</th><th>DISPLAY NAME</th><th>STATUS</th><th>START TYPE</th><th>ACCOUNT</th><th>PID</th></tr></thead><tbody id="service-table"><tr><td colspan="6" class="empty">Waiting for Windows service telemetry…</td></tr></tbody></table></div></article></section>
 
+
       <section class="view" id="view-server">
         <div class="section-intro"><h2>Individual server explorer</h2><p>Select a machine, then drill into each monitoring segment. Every panel is built from that server's latest telemetry.</p></div>
         <div class="server-toolbar">
@@ -117,12 +117,13 @@
 
       <section class="view" id="view-events"><div class="section-intro"><h2>Security events</h2><p>File activity, model-file detection and rule-based system alerts.</p></div><div class="toolbar"><input id="event-search" type="search" placeholder="Search event, host or path…" aria-label="Search events"><select id="severity-filter" aria-label="Filter by severity"><option value="all">All severities</option><option>critical</option><option>high</option><option>medium</option><option>low</option><option>info</option></select></div><article class="panel"><div class="table-wrap"><table><thead><tr><th>EVENT</th><th>HOST</th><th>SEVERITY</th><th>DETAILS</th><th>TIME</th></tr></thead><tbody id="events-table"><tr><td colspan="5" class="empty">Loading events…</td></tr></tbody></table></div></article></section>
 
-      <section class="view" id="view-processes"><div class="section-intro"><h2>Running processes</h2><p>Process snapshot from the selected latest host report.</p></div><article class="panel"><div class="panel-head"><div><h3>Process inventory</h3><p id="process-subtitle">Select a reporting host to inspect its process snapshot.</p></div><select id="process-host" aria-label="Select host"></select></div><div class="table-wrap"><table><thead><tr><th>PID</th><th>PROCESS</th><th>USER</th><th>MEMORY</th><th>EXECUTABLE</th></tr></thead><tbody id="process-table"><tr><td colspan="5" class="empty">Waiting for process telemetry…</td></tr></tbody></div></article></section>
+      <section class="view" id="view-processes"><div class="section-intro"><h2>Running processes</h2><p>Process snapshot from the selected latest host report.</p></div><article class="panel"><div class="panel-head"><div><h3>Process inventory</h3><p id="process-subtitle">Select a reporting host to inspect its process snapshot.</p></div><select id="process-host" aria-label="Select host"></select></div><div class="table-wrap"><table><thead><tr><th>PID</th><th>PROCESS</th><th>USER</th><th>MEMORY</th><th>EXECUTABLE</th></tr></thead><tbody id="process-table"><tr><td colspan="5" class="empty">No process data available.</td></tr></tbody></table></div></article></section>
 
-      <section class="view" id="view-network"><div class="section-intro"><h2>Network ports</h2><p>Listening ports and network exposure reported by monitored endpoints.</p></div><article class="panel"><div class="panel-head"><div><h3>Listening sockets</h3><p id="network-subtitle">Select a host to inspect network listeners.</p></div><select id="network-host" aria-label="Select host"></select></div><div class="table-wrap"><table><thead><tr><th>ADDRESS</th><th>PORT</th><th>PROTOCOL</th><th>PROCESS</th><th>PID</th></tr></thead><tbody id="network-table"><tr><td colspan="5" class="empty">Waiting for network telemetry…</td></tr></tbody></table></div></article></section>
+      <section class="view" id="view-network"><div class="section-intro"><h2>Listening network ports</h2><p>Services currently listening on monitored Linux hosts.</p></div><article class="panel"><div class="panel-head"><div><h3>Socket inventory</h3><p>Listening TCP/UDP sockets reported by the agent.</p></div><select id="network-host" aria-label="Select host"></select></div><div class="table-wrap"><table><thead><tr><th>LOCAL ADDRESS</th><th>PORT</th><th>PID</th><th>PROTOCOL FAMILY</th><th>SOCKET TYPE</th></tr></thead><tbody id="network-table"><tr><td colspan="5" class="empty">No listening-port data available.</td></tr></tbody></table></div></article></section>
 
-      <section class="view" id="view-antivirus"><div class="section-intro"><h2>Endpoint protection</h2><p>Antivirus and endpoint protection status reported by monitored hosts.</p></div><div id="antivirus-content" class="hosts-grid"><div class="panel empty">Waiting for endpoint protection telemetry…</div></div></section>
-      <footer><span>SentinelX · Rule-based cross-platform monitoring</span><span>Data refreshes every 10 seconds · <a href="/docs" target="_blank" rel="noopener">API documentation ↗</a></span></footer>
+      <section class="view" id="view-antivirus"><div class="section-intro"><h2>Endpoint protection</h2><p>Microsoft Defender status on Windows and ClamAV availability on Linux endpoints.</p></div><div id="antivirus-grid" class="hosts-grid"><div class="panel empty">Loading endpoint protection status…</div></div><p class="notice">These are configuration/status checks only. SentinelX does not claim that a malware scan has been performed.</p></section>
+
+      <footer><span>SentinelX · Rule-based cross-platform monitoring</span><span>Data refreshes every 10 seconds · <a href="/docs" target="_blank" rel="noreferrer">API documentation ↗</a></span></footer>
     </main>
   </div>
 </body>
