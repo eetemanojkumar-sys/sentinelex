@@ -1,0 +1,206 @@
+/* SentinelX Enterprise Operations Console — visual layer only.
+   Keeps existing dashboard IDs, data bindings and interactions unchanged. */
+:root{
+  color-scheme:dark;
+  --bg:#070d18;--sidebar:#091321;--panel:#0e1a2b;--panel2:#122238;
+  --line:#1d3048;--text:#edf5ff;--muted:#8da2bd;
+  --cyan:#48e0d0;--blue:#70b4ff;--violet:#ad98ff;--amber:#f4c36b;
+  --red:#ff7888;--green:#58dda2;
+}
+html{scroll-behavior:smooth}
+body{
+  background:
+    radial-gradient(900px 520px at 78% -12%,rgba(36,115,148,.16),transparent 62%),
+    radial-gradient(650px 420px at 15% 105%,rgba(50,75,145,.12),transparent 65%),
+    var(--bg);
+  color:var(--text);letter-spacing:.01em;
+}
+.app-shell{min-height:100vh}
+.sidebar{
+  width:258px;padding:25px 17px 18px;
+  background:linear-gradient(180deg,#0b1829 0%,#081321 100%);
+  border-right:1px solid rgba(105,145,190,.16);
+  box-shadow:12px 0 42px rgba(0,0,0,.16);
+}
+.brand{padding:0 8px 38px;gap:13px}
+.brand-mark{
+  width:42px;height:42px;border-radius:13px;
+  background:linear-gradient(145deg,#66f0df,#159ca9);
+  color:#04131b;font-size:23px;
+  box-shadow:0 0 0 5px rgba(72,224,208,.07),0 10px 28px rgba(24,198,190,.2);
+}
+.brand strong{font-size:18px;letter-spacing:.2px}
+.brand small{font-size:8px;letter-spacing:1.55px;color:#8ba4c1}
+.side-label,.eyebrow{color:#7892b1;font-size:9px;letter-spacing:1.8px}
+.nav{gap:5px}
+.nav-link{
+  height:42px;padding:0 12px;border:1px solid transparent;
+  border-radius:10px;color:#9aacc4;font-size:12px;transition:.18s ease;
+}
+.nav-link>span{font-size:17px;color:#7f9bb8}
+.nav-link:hover{background:rgba(63,105,143,.13);border-color:rgba(102,155,197,.13);color:#f3f8ff}
+.nav-link.active{
+  background:linear-gradient(100deg,rgba(44,173,171,.18),rgba(34,83,112,.14));
+  border-color:rgba(72,224,208,.18);color:#eafffc;
+  box-shadow:inset 3px 0 var(--cyan),0 5px 18px rgba(0,0,0,.12);
+}
+.nav-link.active>span{color:var(--cyan)}
+.nav-link b{background:#173a4a;color:#8cece0}
+.sidebar-bottom{border-color:rgba(105,145,190,.16);padding:16px 8px 0}
+.connection-indicator{font-size:11px}
+.main{margin-left:258px;padding:0 38px;max-width:1900px}
+.topbar{
+  min-height:106px;height:auto;padding:18px 0;
+  border-bottom:1px solid rgba(105,145,190,.16);
+}
+.topbar h1{font-size:25px;letter-spacing:-.8px;font-weight:760}
+.top-actions{gap:13px}
+.updated{font-size:11px;color:#8299b5}
+.refresh-btn{
+  border:1px solid rgba(72,224,208,.28);
+  background:linear-gradient(135deg,rgba(36,105,119,.38),rgba(20,43,64,.88));
+  color:#cffff9;padding:9px 14px;border-radius:9px;
+  box-shadow:0 5px 18px rgba(0,0,0,.12);transition:.18s ease;
+}
+.refresh-btn:hover{border-color:var(--cyan);background:#17394a;transform:translateY(-1px)}
+.view{padding:30px 0 22px}
+.welcome-row,.section-intro{margin-bottom:22px}
+.welcome-row h2,.section-intro h2{font-size:19px;letter-spacing:-.35px;font-weight:720}
+.welcome-row p,.section-intro p,.panel-head p{font-size:12px;color:#8ba0bb}
+.live-pill{
+  border:1px solid rgba(88,221,162,.25);color:#8ce8b8;
+  background:rgba(28,102,73,.17);padding:7px 12px;font-size:9px;
+}
+.metric-grid{gap:15px;margin-bottom:17px}
+.metric-card,.panel{
+  background:linear-gradient(145deg,rgba(17,34,55,.97),rgba(11,25,42,.98));
+  border:1px solid rgba(104,143,184,.18);border-radius:14px;
+  box-shadow:0 12px 32px rgba(0,0,0,.13);
+}
+.metric-card{
+  position:relative;overflow:hidden;padding:18px 19px;min-height:145px;
+  transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;
+}
+.metric-card:before{
+  content:"";position:absolute;inset:0 0 auto;height:2px;
+  background:linear-gradient(90deg,rgba(72,224,208,.72),rgba(112,180,255,.08) 75%,transparent);
+}
+.metric-card:hover{transform:translateY(-2px);border-color:rgba(72,224,208,.3);box-shadow:0 16px 34px rgba(0,0,0,.2)}
+.metric-head{color:#a6b8ce;font-size:11px;font-weight:600}
+.metric-icon{width:33px;height:33px;border:1px solid rgba(117,161,201,.12);border-radius:10px}
+.metric-value{font-size:34px;letter-spacing:-1.4px;font-weight:780;margin:11px 0 2px}
+.metric-foot{font-size:10px;color:#8096b1}
+.meter{height:5px;background:#1d3047;margin:8px 0 7px}
+.meter i{background:linear-gradient(90deg,#39cfc2,#6eaefb)}
+.content-grid{gap:16px;margin-bottom:17px}
+.panel{padding:19px;margin-bottom:16px}
+.panel-head{margin-bottom:17px}
+.panel-head h3{font-size:13px;font-weight:720;letter-spacing:.1px}
+.chart-legend{font-size:10px;color:#9db0c7}
+#resource-chart,#disk-history-chart{max-width:100%}
+.host-list{gap:8px}
+.host-row{padding:11px 12px;background:rgba(19,39,61,.72);border:1px solid rgba(106,148,190,.14);border-radius:10px}
+.host-row:hover{border-color:rgba(72,224,208,.26)}
+.host-name{font-size:12px}
+.host-meta{font-size:10px;color:#8ca2bc}
+.status,.severity,.disk-health{
+  border-radius:6px;font-size:9px;font-weight:800;letter-spacing:.55px;
+  padding:5px 8px;
+}
+.status.online{color:#82e8b5;background:rgba(35,135,91,.16);border:1px solid rgba(88,221,162,.16)}
+.status.stale{color:#f4cb7e;background:rgba(158,111,38,.16);border:1px solid rgba(244,195,107,.15)}
+.text-link{color:#70e2d5;font-weight:700}
+.text-link:hover{color:#b0fff5}
+.table-wrap{border:1px solid rgba(104,143,184,.12);border-radius:10px}
+table{white-space:nowrap}
+th{
+  background:rgba(16,34,54,.8);font-size:9px;letter-spacing:1.1px;
+  color:#8198b4;padding:12px 13px;border-bottom:1px solid rgba(104,143,184,.17);
+}
+td{font-size:11px;color:#d0dced;padding:12px 13px;border-bottom:1px solid rgba(104,143,184,.1)}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:rgba(42,91,120,.12)}
+.empty{color:#8197b1}
+.toolbar,.disk-toolbar,.server-toolbar{
+  background:rgba(13,28,46,.76);border:1px solid rgba(104,143,184,.16);
+  border-radius:12px;padding:13px;margin-bottom:16px;
+}
+.toolbar input,.toolbar select,.disk-toolbar select,.disk-toolbar input,
+.server-toolbar select{
+  background:#0a1727;border:1px solid #2a405a;border-radius:9px;
+  color:#e4efff;padding:10px 12px;font:inherit;font-size:11px;
+}
+.toolbar input:focus,.toolbar select:focus,.disk-toolbar select:focus,
+.disk-toolbar input:focus,.server-toolbar select:focus{
+  outline:none;border-color:rgba(72,224,208,.7);box-shadow:0 0 0 3px rgba(72,224,208,.09);
+}
+.disk-toolbar{display:grid;grid-template-columns:1fr 1fr 1.4fr 1fr;gap:11px}
+.disk-toolbar label,.server-toolbar label{color:#91a7c1;font-size:9px}
+.disk-toolbar select,.disk-toolbar input{width:100%}
+.disk-health.healthy{background:rgba(35,135,91,.16);color:#82e8b5}
+.disk-health.warning{background:rgba(158,111,38,.18);color:#f4cb7e}
+.disk-health.critical{background:rgba(166,54,70,.18);color:#ff9aa5}
+.disk-health-meter,.disk-row-meter{background:#1e344b}
+.disk-breakdown div{border-color:rgba(104,143,184,.15)}
+.notice,.chart-note{color:#91a6bf;font-size:10px}
+.hosts-grid{gap:15px}
+.host-card{
+  background:linear-gradient(145deg,#112238,#0c1a2c);
+  border:1px solid rgba(104,143,184,.18);border-radius:14px;
+  box-shadow:0 12px 30px rgba(0,0,0,.12);
+}
+.host-card:hover{border-color:rgba(72,224,208,.26)}
+.host-card-head{border-bottom:1px solid rgba(104,143,184,.13)}
+.host-card h3{font-size:14px}
+.host-stats{gap:10px}
+.host-stat{background:rgba(4,14,27,.28);border:1px solid rgba(104,143,184,.1);border-radius:9px;padding:9px}
+.host-stat span{color:#8da3bd}
+.host-last{color:#839ab5}
+.segment-tabs{gap:7px}
+.segment-tab{
+  border:1px solid rgba(104,143,184,.17);background:#0e1d30;
+  color:#9bb0c8;border-radius:9px;padding:9px 13px;
+}
+.segment-tab:hover{border-color:rgba(72,224,208,.35);color:#e7fffc}
+.segment-tab.active{background:rgba(34,126,132,.2);border-color:rgba(72,224,208,.4);color:#9af3e9}
+.server-gauge-card,.server-kpi{background:linear-gradient(145deg,#112238,#0b192a);border-color:rgba(104,143,184,.17);border-radius:13px}
+.server-kpi strong{letter-spacing:-.7px}
+.admin-login-overlay{
+  background:rgba(2,8,17,.82);backdrop-filter:blur(14px);
+}
+.admin-login-card{
+  background:linear-gradient(145deg,#13263e,#0b1728);
+  border:1px solid rgba(72,224,208,.22);border-radius:18px;
+  box-shadow:0 25px 90px rgba(0,0,0,.55);padding:34px;
+}
+.admin-login-card h2{font-size:21px;letter-spacing:-.5px}
+.admin-login-card p{color:#94a9c2}
+.admin-login-card input{
+  background:#081525;border:1px solid #2a405a;border-radius:9px;
+  color:#eef8ff;padding:12px;
+}
+.admin-login-card button{
+  background:linear-gradient(110deg,#43d8ca,#53b7d4);color:#04141b;
+  border:0;border-radius:9px;font-weight:800;padding:12px;cursor:pointer;
+}
+footer{color:#8096b1;border-color:rgba(104,143,184,.14)}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{
+  outline:2px solid var(--cyan);outline-offset:3px;
+}
+@media(max-width:1050px){
+  .sidebar{width:220px}.main{margin-left:220px;padding:0 24px}
+}
+@media(max-width:760px){
+  .sidebar{width:auto;padding:13px 14px;background:#091523}
+  .brand{padding:0 4px 13px}.main{margin:0;padding:0 14px}
+  .topbar{min-height:78px;padding:12px 0}.topbar h1{font-size:20px}
+  .view{padding-top:22px}.metric-grid{gap:10px}
+  .metric-card{min-height:126px;padding:14px}
+  .metric-value{font-size:28px}
+  .panel{padding:14px}
+  .disk-toolbar{grid-template-columns:1fr 1fr}
+  .toolbar{flex-wrap:wrap}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*:before,*:after{scroll-behavior:auto!important;transition:none!important;animation:none!important}
+}
