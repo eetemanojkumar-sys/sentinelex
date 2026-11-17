@@ -305,6 +305,15 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
     service_payload = (payload.metrics or {}).get("services") or {}
     service_items = service_payload.get("items") if isinstance(service_payload, dict) else []
     if isinstance(service_items, list):
+        # One bounded query per host/batch, rather than one query per service.
+        latest_rows = db.scalars(
+            select(ServiceStateHistory).where(
+                ServiceStateHistory.host_id == payload.host_id
+            ).order_by(desc(ServiceStateHistory.collected_at)).limit(2000)
+        ).all()
+        latest_by_name = {}
+        for existing_state in latest_rows:
+            latest_by_name.setdefault(existing_state.service_name, existing_state)
         for item in service_items[:500]:
             if not isinstance(item, dict):
                 continue
@@ -312,19 +321,14 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
             state = str(item.get("status") or item.get("state") or "unknown")[:80].lower()
             if not service_name:
                 continue
-            latest_state = db.scalar(
-                select(ServiceStateHistory)
-                .where(ServiceStateHistory.host_id == payload.host_id,
-                       ServiceStateHistory.service_name == service_name)
-                .order_by(desc(ServiceStateHistory.collected_at)).limit(1)
-            )
+            latest_state = latest_by_name.get(service_name)
             if latest_state is not None:
                 latest_time = latest_state.collected_at
                 if latest_time.tzinfo is None:
                     latest_time = latest_time.replace(tzinfo=timezone.utc)
                 if collected_at <= latest_time or latest_state.state == state:
                     continue
-            db.add(ServiceStateHistory(
+            new_state = ServiceStateHistory(
                 host_id=payload.host_id, service_name=service_name,
                 display_name=(str(item.get("display_name") or "")[:255] or None),
                 state=state,
@@ -333,7 +337,9 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
                 details={k: item.get(k) for k in
                          ("start_type", "username", "pid", "load_state")
                          if item.get(k) is not None},
-            ))
+            )
+            db.add(new_state)
+            latest_by_name[service_name] = new_state
 
     if payload.events:
         db.add_all([
@@ -439,12 +445,20 @@ def host_timeline(host_id: str, start: datetime | None = None, end: datetime | N
 
 
 @app.get("/api/v1/history/capabilities")
-def history_capabilities(_admin: bool = Depends(authenticate_admin),
+def history_capabilities(host_id: str | None = Query(default=None, max_length=255),
+                         _admin: bool = Depends(authenticate_admin),
                          db: Session = Depends(db_session)):
-    return {"sources": {
-        "telemetry": db.scalar(select(func.count()).select_from(Telemetry)) or 0,
-        "security_events": db.scalar(select(func.count()).select_from(SecurityEvent)) or 0,
-        "service_transitions": db.scalar(select(func.count()).select_from(ServiceStateHistory)) or 0,
+    telemetry_q = select(func.count()).select_from(Telemetry)
+    events_q = select(func.count()).select_from(SecurityEvent)
+    services_q = select(func.count()).select_from(ServiceStateHistory)
+    if host_id:
+        telemetry_q = telemetry_q.where(Telemetry.host_id == host_id)
+        events_q = events_q.where(SecurityEvent.host_id == host_id)
+        services_q = services_q.where(ServiceStateHistory.host_id == host_id)
+    return {"host_id": host_id, "sources": {
+        "telemetry": db.scalar(telemetry_q) or 0,
+        "security_events": db.scalar(events_q) or 0,
+        "service_transitions": db.scalar(services_q) or 0,
     }, "process_history_note": "Process snapshots are available for retained telemetry rows containing a processes array."}
 
 
