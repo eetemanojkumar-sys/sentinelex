@@ -11,6 +11,7 @@ from collectors import common, linux
 
 
 class LinuxCollectorTests(unittest.TestCase):
+    @patch.object(linux, "linux_services", return_value={"available": True, "items": []})
     @patch.object(linux, "antivirus_status", return_value={"clamd": False})
     @patch.object(common.psutil, "cpu_percent", return_value=3.5)
     @patch.object(common.psutil, "boot_time", return_value=1000.0)
@@ -21,7 +22,7 @@ class LinuxCollectorTests(unittest.TestCase):
     @patch.object(common.psutil, "sensors_temperatures", return_value={}, create=True)
     def test_preserves_legacy_metric_schema(
         self, _temps, _connections, _processes, _partitions, virtual_memory,
-        _boot, _cpu, _antivirus
+        _boot, _cpu, _antivirus, _services
     ):
         virtual_memory.return_value = SimpleNamespace(
             total=1024, available=512, percent=50.0
@@ -31,12 +32,25 @@ class LinuxCollectorTests(unittest.TestCase):
             "hostname", "platform", "os", "boot_time", "uptime_seconds",
             "cpu_percent", "cpu_count_logical", "memory", "swap", "disk",
             "network_interfaces", "temperatures", "process_count",
-            "processes", "listening_ports", "antivirus",
+            "processes", "listening_ports", "antivirus", "services",
         }
         self.assertEqual(set(metrics), expected)
         self.assertEqual(metrics["cpu_percent"], 3.5)
         self.assertEqual(metrics["memory"]["percent"], 50.0)
         self.assertEqual(metrics["process_count"], 0)
+
+    @patch.object(linux.subprocess, "run")
+    def test_linux_services_parses_systemd_snapshot(self, run):
+        run.return_value = SimpleNamespace(
+            returncode=0,
+            stdout="nginx.service loaded active running A high performance web server\\n",
+            stderr="",
+        )
+        result = linux.linux_services()
+        self.assertTrue(result["available"])
+        self.assertEqual(result["items"][0]["name"], "nginx.service")
+        self.assertEqual(result["items"][0]["status"], "active")
+        self.assertEqual(result["items"][0]["sub_state"], "running")
 
     def test_disk_alert_thresholds_are_transition_based(self):
         disk_state = {}

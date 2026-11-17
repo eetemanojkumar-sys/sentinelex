@@ -2,9 +2,9 @@ name: SentinelX agent tests
 
 on:
   push:
-    branches: [main, cross-platform-v1]
+    branches: [main, cross-platform-v1, feature/historical-intelligence]
   pull_request:
-    branches: [main]
+    branches: [main, feature/historical-intelligence]
 
 jobs:
   agent-tests:

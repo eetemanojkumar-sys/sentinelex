@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from outbox import acknowledge_batch, enqueue_batch, get_pending_batch
+from outbox import acknowledge_batch, enqueue_batch, get_pending_batch, reject_batch
 
 
 class OutboxTests(unittest.TestCase):
@@ -30,6 +30,22 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual(get_pending_batch(), payload)
         acknowledge_batch("batch-001")
         self.assertIsNone(get_pending_batch())
+
+    def test_permanent_failure_moves_batch_to_dead_letter(self):
+        payload = {"batch_id": "dead-letter-1", "events": [{"message": "bad"}]}
+        enqueue_batch(payload)
+        reject_batch("dead-letter-1", "HTTP 422")
+        self.assertIsNone(get_pending_batch())
+        import sqlite3
+        connection = sqlite3.connect(self.db_path)
+        try:
+            row = connection.execute(
+                "SELECT reason FROM dead_letter_batches WHERE batch_id = ?",
+                ("dead-letter-1",),
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual(row[0], "HTTP 422")
 
     def test_duplicate_enqueue_does_not_replace_original_payload(self):
         original = {"batch_id": "batch-002", "value": 1}

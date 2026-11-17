@@ -2,6 +2,31 @@
 import shutil
 import subprocess
 
+
+def linux_services(limit=250):
+    """Return a bounded systemd service snapshot on Linux hosts."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "list-units", "--type=service", "--all", "--no-legend", "--no-pager"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if result.returncode != 0:
+            return {"available": False, "items": [], "reason": (result.stderr or "systemctl unavailable")[:300]}
+        items = []
+        for line in result.stdout.splitlines():
+            parts = line.split(None, 4)
+            if len(parts) < 4 or not parts[0].endswith(".service"):
+                continue
+            items.append({
+                "name": parts[0], "display_name": parts[4] if len(parts) > 4 else parts[0],
+                "load_state": parts[1], "status": parts[2], "sub_state": parts[3],
+            })
+            if len(items) >= max(1, min(int(limit), 500)):
+                break
+        return {"available": True, "items": items}
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"available": False, "items": [], "reason": str(exc)[:300]}
+
 from collectors.common import collect_base_metrics
 
 
@@ -64,5 +89,6 @@ def collect_metrics(queue_event, disk_alert_states):
                 )
             disk_alert_states[mountpoint] = state
 
+    metrics["services"] = linux_services()
     metrics["antivirus"] = antivirus_status()
     return metrics
