@@ -31,6 +31,48 @@ class OutboxTests(unittest.TestCase):
         acknowledge_batch("batch-001")
         self.assertIsNone(get_pending_batch())
 
+    def test_log_records_remain_immutable_until_batch_acknowledgement(self):
+        payload = {
+            "batch_id": "batch-with-logs",
+            "host_id": "host-a",
+            "metrics": {"cpu_percent": 91.0},
+            "events": [],
+            "logs": [
+                {
+                    "source": "systemd",
+                    "channel": "journal",
+                    "severity": "high",
+                    "message": "service failed",
+                    "record_id": "cursor-123",
+                }
+            ],
+        }
+        expected = {
+            "batch_id": "batch-with-logs",
+            "host_id": "host-a",
+            "metrics": {"cpu_percent": 91.0},
+            "events": [],
+            "logs": [
+                {
+                    "source": "systemd",
+                    "channel": "journal",
+                    "severity": "high",
+                    "message": "service failed",
+                    "record_id": "cursor-123",
+                }
+            ],
+        }
+        enqueue_batch(payload)
+        payload["logs"].clear()
+        payload["metrics"]["cpu_percent"] = 0
+
+        # Repeated reads model retry attempts after a lost acknowledgement.
+        self.assertEqual(get_pending_batch(), expected)
+        self.assertEqual(get_pending_batch(), expected)
+
+        acknowledge_batch("batch-with-logs")
+        self.assertIsNone(get_pending_batch())
+
     def test_permanent_failure_moves_batch_to_dead_letter(self):
         payload = {"batch_id": "dead-letter-1", "events": [{"message": "bad"}]}
         enqueue_batch(payload)
