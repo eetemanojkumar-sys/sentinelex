@@ -8,9 +8,9 @@ import psutil
 
 
 _SECRET_PATTERNS = [
-    (re.compile(r"(?i)\\b(password|passwd|pwd|token|secret|api[_-]?key|authorization)\\b\\s*[:=]\\s*([^\\s,;]+)"), r"\\1=[REDACTED]"),
-    (re.compile(r"(?i)\\b(Bearer)\\s+[A-Za-z0-9._~+/=-]+"), r"\\1 [REDACTED]"),
-    (re.compile(r"\\bAKIA[0-9A-Z]{16}\\b"), "[REDACTED_AWS_ACCESS_KEY]"),
+    (re.compile(r"(?i)\b(password|passwd|pwd|token|secret|api[_-]?key|authorization)\b\s*[:=]\s*([^\s,;]+)"), r"\1=[REDACTED]"),
+    (re.compile(r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]+"), r"\1 [REDACTED]"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED_AWS_ACCESS_KEY]"),
     (re.compile(r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----", re.DOTALL), "[REDACTED_PRIVATE_KEY]"),
 ]
 
