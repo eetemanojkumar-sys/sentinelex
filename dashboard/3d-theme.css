@@ -170,3 +170,40 @@ footer { color: var(--muted); border-top-color: var(--line); }
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
   .metric-card, .panel, .host-card, .server-kpi { transform: none !important; }
 }
+
+
+/* Historical Intelligence page shares the same visual system. */
+.top {
+  background: linear-gradient(110deg, rgba(24,27,31,.98), rgba(21,24,29,.96));
+  border-bottom-color: var(--line);
+  box-shadow: 0 12px 34px rgba(0,0,0,.2);
+}
+.top a { color: var(--blue); }
+.top span, .intro p, .panel p, footer, #status { color: var(--muted); }
+.eyebrow { color: var(--blue) !important; }
+.controls {
+  background: linear-gradient(145deg, rgba(31,35,42,.98), rgba(24,27,31,.98));
+  border-color: var(--line);
+  box-shadow: var(--depth-shadow), inset 0 1px rgba(255,255,255,.04);
+}
+.controls input, .controls select {
+  background: #14171d;
+  color: var(--text);
+  border-color: var(--line);
+}
+.controls button {
+  background: linear-gradient(145deg, #6E9FFF, #5794F2);
+  color: #111217;
+  box-shadow: 0 8px 20px rgba(87,148,242,.2);
+}
+.cards article, .process-grid article {
+  background: linear-gradient(145deg, #20242b, #181B1F);
+  border: 1px solid var(--line);
+  box-shadow: var(--depth-shadow), inset 0 1px rgba(255,255,255,.035);
+}
+.cards strong { color: var(--text); }
+.event { border-left-color: var(--series-blue); border-bottom-color: var(--line); }
+.process-grid h3 { color: var(--series-teal); }
+.state { background: #292e37; }
+.state.failed, .state.inactive { color: var(--red); background: rgba(242,73,92,.12); }
+.state.active, .state.running { color: var(--green); background: rgba(115,191,105,.12); }
