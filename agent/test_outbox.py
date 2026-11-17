@@ -37,11 +37,14 @@ class OutboxTests(unittest.TestCase):
         reject_batch("dead-letter-1", "HTTP 422")
         self.assertIsNone(get_pending_batch())
         import sqlite3
-        with sqlite3.connect(self.db_path) as connection:
+        connection = sqlite3.connect(self.db_path)
+        try:
             row = connection.execute(
                 "SELECT reason FROM dead_letter_batches WHERE batch_id = ?",
                 ("dead-letter-1",),
             ).fetchone()
+        finally:
+            connection.close()
         self.assertEqual(row[0], "HTTP 422")
 
     def test_duplicate_enqueue_does_not_replace_original_payload(self):
