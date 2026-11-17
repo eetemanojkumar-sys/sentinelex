@@ -1,9 +1,26 @@
 """Operating-system-independent SentinelX telemetry collectors."""
 import platform
+import re
 import socket
 import time
 
 import psutil
+
+
+_SECRET_PATTERNS = [
+    (re.compile(r"(?i)\\b(password|passwd|pwd|token|secret|api[_-]?key|authorization)\\b\\s*[:=]\\s*([^\\s,;]+)"), r"\\1=[REDACTED]"),
+    (re.compile(r"(?i)\\b(Bearer)\\s+[A-Za-z0-9._~+/=-]+"), r"\\1 [REDACTED]"),
+    (re.compile(r"\\bAKIA[0-9A-Z]{16}\\b"), "[REDACTED_AWS_ACCESS_KEY]"),
+    (re.compile(r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----", re.DOTALL), "[REDACTED_PRIVATE_KEY]"),
+]
+
+
+def redact_log_message(message, limit=4000):
+    """Redact common credential patterns and bound centrally stored log text."""
+    text = str(message or "")
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text[:max(1, min(int(limit), 4000))]
 
 
 def collect_base_metrics():
