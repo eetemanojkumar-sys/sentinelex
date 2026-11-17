@@ -5,7 +5,7 @@ import threading
 
 import psutil
 
-from collectors.common import collect_base_metrics
+from collectors.common import collect_base_metrics, redact_log_message
 
 _seen_security_record_ids = set()
 _seen_lock = threading.Lock()
@@ -161,6 +161,83 @@ def emit_security_events(queue_event, result):
         )
         emitted += 1
     return emitted
+
+
+def collect_logs(limit=100, window_minutes=3):
+    """Collect bounded System, Application and Security event-log records."""
+    safe_limit = max(1, min(int(limit), 250))
+    safe_window = max(1, min(int(window_minutes), 15))
+    per_channel = max(1, (safe_limit + 2) // 3)
+    script = r"""
+$ErrorActionPreference = 'Continue'
+$start = (Get-Date).AddMinutes(-WINDOW_PLACEHOLDER)
+$records = @()
+foreach ($channel in @('System', 'Application', 'Security')) {
+    try {
+        $found = Get-WinEvent -FilterHashtable @{
+            LogName = $channel
+            StartTime = $start
+        } -MaxEvents PER_CHANNEL_PLACEHOLDER -ErrorAction Stop
+        foreach ($event in $found) {
+            $records += [PSCustomObject]@{
+                source = $event.ProviderName
+                channel = $channel
+                severity = $event.Level
+                event_id = $event.Id
+                record_id = $event.RecordId
+                message = $event.Message
+                timestamp = $event.TimeCreated.ToUniversalTime().ToString('o')
+                details = @{ level = $event.LevelDisplayName }
+            }
+        }
+    }
+    catch {
+        # Empty, disabled, or inaccessible channels must not stop other channels.
+        continue
+    }
+}
+ConvertTo-Json -InputObject @($records) -Compress -Depth 4
+""".replace("WINDOW_PLACEHOLDER", str(safe_window)).replace(
+        "PER_CHANNEL_PLACEHOLDER", str(per_channel)
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        data = json.loads(result.stdout)
+        if isinstance(data, dict):
+            data = [data]
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return []
+
+    severity_map = {
+        1: "critical", 2: "high", 3: "warning",
+        4: "info", 0: "info",
+    }
+    records = []
+    for item in data[:safe_limit]:
+        message = redact_log_message(item.get("message", ""))
+        if not message:
+            continue
+        try:
+            raw_level = int(item.get("severity") or 0)
+        except (TypeError, ValueError):
+            raw_level = 0
+        records.append({
+            "source": str(item.get("source") or "Windows Event Log")[:200],
+            "channel": str(item.get("channel") or "System")[:100],
+            "severity": severity_map.get(raw_level, "info"),
+            "event_id": str(item.get("event_id") or "") or None,
+            "record_id": str(item.get("record_id") or "") or None,
+            "message": message,
+            "timestamp": item.get("timestamp"),
+            "details": item.get("details") or {},
+        })
+    return records
+
 
 def collect_metrics(queue_event, disk_alert_states):
     """Collect shared metrics plus Windows-specific service and Defender status."""
