@@ -28,13 +28,23 @@ class TelemetryIngestionTests(unittest.TestCase):
                 "platform": "Linux",
                 "architecture": "x86_64",
             },
-            metrics={"hostname": "test-host", "cpu_percent": 12.5, "services": {"available": True, "items": [{"name": "nginx.service", "status": "active"}]}, "processes": [{"pid": 1, "name": "systemd"}]},
+            metrics={"hostname": "test-host", "cpu_percent": 96.0,
+                     "memory": {"percent": 92.0},
+                     "disk": {"/": {"percent": 91.0}},
+                     "services": {"available": True, "items": [{"name": "nginx.service", "status": "active"}]},
+                     "processes": [{"pid": 1, "name": "systemd"}]},
             events=[
                 main.EventIn(
                     event_type="test_event",
                     severity="low",
                     message="Test event",
                 )
+            ],
+            logs=[
+                main.LogIn(source="systemd", channel="journal", severity="critical",
+                           event_id="OOM", record_id="1234",
+                           message="Out of memory: killed process test-service",
+                           timestamp=main.utcnow()),
             ],
         )
 
@@ -52,6 +62,23 @@ class TelemetryIngestionTests(unittest.TestCase):
             self.assertEqual(db.query(main.SecurityEvent).filter_by(host_id="test-host-01").count(), 1)
             self.assertEqual(db.query(main.IngestedBatch).filter_by(host_id="test-host-01").count(), 1)
             self.assertEqual(db.query(main.ServiceStateHistory).filter_by(host_id="test-host-01").count(), 1)
+            self.assertEqual(first["logs_received"], 1)
+            self.assertEqual(db.query(main.LogRecord).filter_by(host_id="test-host-01").count(), 1)
+            self.assertGreaterEqual(db.query(main.Incident).filter_by(host_id="test-host-01").count(), 4)
+            logs = main.search_logs(host_id="test-host-01", severity="critical",
+                                    source="systemd", q="memory", start=None, end=None,
+                                    limit=50, offset=0, _admin=True, db=db)
+            self.assertEqual(logs["total"], 1)
+            incidents = main.list_incidents(host_id="test-host-01", status="open",
+                                            severity=None, limit=50, offset=0,
+                                            _admin=True, db=db)
+            self.assertGreaterEqual(incidents["total"], 4)
+            incident_id = incidents["items"][0]["id"]
+            status_result = main.update_incident_status(
+                incident_id, main.IncidentStatusIn(status="investigating"),
+                _admin=True, db=db,
+            )
+            self.assertEqual(status_result["status"], "investigating")
             changed = main.TelemetryIn(host_id="test-host-01", batch_id="test-batch-0002", sequence=2, collected_at=main.utcnow(), metrics={"services": {"items": [{"name": "nginx.service", "status": "failed"}]}}, events=[])
             main.ingest(changed, "sentinelx-test-token", db)
             self.assertEqual(db.query(main.ServiceStateHistory).filter_by(host_id="test-host-01").count(), 2)
