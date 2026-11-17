@@ -1,6 +1,8 @@
 """Linux-specific metric collection for SentinelX."""
+import json
 import shutil
 import subprocess
+from datetime import datetime, timezone
 
 
 def linux_services(limit=250):
@@ -27,7 +29,7 @@ def linux_services(limit=250):
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"available": False, "items": [], "reason": str(exc)[:300]}
 
-from collectors.common import collect_base_metrics
+from collectors.common import collect_base_metrics, redact_log_message
 
 
 def antivirus_status():
@@ -47,6 +49,68 @@ def antivirus_status():
     except (OSError, subprocess.TimeoutExpired):
         status["clamav_daemon_active"] = None
     return status
+
+
+def collect_logs(limit=100, window_minutes=3):
+    """Collect a bounded, overlapping window of journal records for central deduplication."""
+    safe_limit = max(1, min(int(limit), 250))
+    safe_window = max(1, min(int(window_minutes), 15))
+    try:
+        result = subprocess.run(
+            [
+                "journalctl", f"--since=-{safe_window}min", "-n", str(safe_limit),
+                "--output=json", "--no-pager",
+            ],
+            capture_output=True, text=True, timeout=8, check=False,
+        )
+        if result.returncode != 0:
+            return []
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+
+    severity_map = {
+        0: "critical", 1: "critical", 2: "critical", 3: "high",
+        4: "warning", 5: "info", 6: "info", 7: "debug",
+    }
+    records = []
+    for line in result.stdout.splitlines():
+        if len(records) >= safe_limit:
+            break
+        try:
+            item = json.loads(line)
+            raw_time = item.get("__REALTIME_TIMESTAMP")
+            timestamp = None
+            if raw_time is not None:
+                timestamp = datetime.fromtimestamp(
+                    int(raw_time) / 1_000_000, tz=timezone.utc
+                ).isoformat()
+            priority = int(item.get("PRIORITY", 6))
+            source = (
+                item.get("SYSLOG_IDENTIFIER")
+                or item.get("_COMM")
+                or item.get("_SYSTEMD_UNIT")
+                or "system"
+            )
+            message = redact_log_message(item.get("MESSAGE", ""))
+            if not message:
+                continue
+            records.append({
+                "source": str(source)[:200],
+                "channel": "journal",
+                "severity": severity_map.get(priority, "info"),
+                "event_id": None,
+                "record_id": str(item.get("__CURSOR") or "")[:300] or None,
+                "message": message,
+                "timestamp": timestamp,
+                "details": {
+                    "unit": item.get("_SYSTEMD_UNIT"),
+                    "pid": item.get("_PID"),
+                    "priority": priority,
+                },
+            })
+        except (TypeError, ValueError, OSError):
+            continue
+    return records
 
 
 def collect_metrics(queue_event, disk_alert_states):
