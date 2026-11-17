@@ -43,6 +43,7 @@ MODEL_EXTENSIONS = {
     ".pt", ".pth", ".onnx", ".safetensors", ".model",
 }
 events = []
+logs_buffer = []
 event_lock = Lock()
 disk_alert_states = {}
 
@@ -143,6 +144,16 @@ def queue_event(event_type, severity, message, details=None):
         events.append(item)
 
 
+def queue_logs(items):
+    """Buffer log records until their immutable telemetry batch is acknowledged."""
+    if not items:
+        return
+    with event_lock:
+        logs_buffer.extend(items[:250])
+        if len(logs_buffer) > 1000:
+            del logs_buffer[:-1000]
+
+
 def sha256_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -204,9 +215,9 @@ class ChangeHandler(FileSystemEventHandler):
 
 
 if platform.system() == "Windows":
-    from collectors.windows import collect_metrics
+    from collectors.windows import collect_metrics, collect_logs
 elif platform.system() == "Linux":
-    from collectors.linux import collect_metrics
+    from collectors.linux import collect_metrics, collect_logs
 else:
     raise SystemExit(f"Unsupported SentinelX platform: {platform.system()}")
 
@@ -246,11 +257,14 @@ def send_payload(metrics):
                 "sequence": sequence,
                 "metrics": metrics,
                 "events": batch[:200],
+                "logs": logs_buffer[:250],
             }
-            # Only remove events after the exact payload is safely on disk.
+            # Only remove buffered records after the exact payload is safely on disk.
             enqueue_batch(payload)
             del events[:min(len(batch), 200)]
+            del logs_buffer[:min(len(logs_buffer), 250)]
     batch_size = len(payload["events"])
+    log_count = len(payload.get("logs", []))
     try:
         response = requests.post(
             f"{CENTRAL_URL}/api/v1/telemetry",
@@ -260,7 +274,7 @@ def send_payload(metrics):
         )
         response.raise_for_status()
         acknowledge_batch(payload["batch_id"])
-        print(f"Telemetry acknowledged; events={batch_size}", flush=True)
+        print(f"Telemetry acknowledged; events={batch_size}; logs={log_count}", flush=True)
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 0
         if status in (400, 413, 422):
@@ -282,6 +296,7 @@ def main():
     try:
         while True:
             try:
+                queue_logs(collect_logs())
                 send_payload(collect_metrics(queue_event, disk_alert_states))
             except Exception as exc:
                 print(f"Collection error: {exc}", flush=True)
