@@ -537,14 +537,19 @@ def disk_history(host_id: str = Query(min_length=1, max_length=255),
 def metrics_history(host_id: str = Query(min_length=1, max_length=255),
                     metric: str = Query(default="cpu", regex="^(cpu|memory|network)$"),
                     limit: int = Query(default=120, ge=2, le=500),
+                    start: datetime | None = None, end: datetime | None = None,
                     _admin: bool = Depends(authenticate_admin),
                     db: Session = Depends(db_session)):
     """Return bounded historical CPU, memory or network samples for one host."""
     if metric not in {"cpu", "memory", "network"}:
         raise HTTPException(status_code=400, detail="metric must be cpu, memory, or network")
     limit = max(2, min(limit, 500))
-    rows = db.scalars(select(Telemetry).where(Telemetry.host_id == host_id)
-                      .order_by(desc(Telemetry.received_at)).limit(limit)).all()
+    history_query = select(Telemetry).where(Telemetry.host_id == host_id)
+    if start:
+        history_query = history_query.where(Telemetry.received_at >= _normalize_dt(start))
+    if end:
+        history_query = history_query.where(Telemetry.received_at <= _normalize_dt(end))
+    rows = db.scalars(history_query.order_by(desc(Telemetry.received_at)).limit(limit)).all()
     samples = []
     for row in reversed(rows):
         data = row.metrics or {}

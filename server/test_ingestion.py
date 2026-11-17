@@ -12,6 +12,12 @@ from server import main
 
 
 class TelemetryIngestionTests(unittest.TestCase):
+    def test_bootstrap_token_cannot_ingest_without_explicit_legacy_override(self):
+        from fastapi import HTTPException
+        with main.SessionLocal() as db:
+            with self.assertRaises(HTTPException):
+                main.authenticate_agent("sentinelx-test-token", db)
+
     def test_replayed_batch_is_acknowledged_without_duplicate_writes(self):
         payload = main.TelemetryIn(
             host_id="test-host-01",
@@ -50,6 +56,8 @@ class TelemetryIngestionTests(unittest.TestCase):
             main.ingest(changed, "sentinelx-test-token", db)
             self.assertEqual(db.query(main.ServiceStateHistory).filter_by(host_id="test-host-01").count(), 2)
             history = main.service_history("test-host-01", None, None, 500, True, db)
+            processes = main.process_history("test-host-01", None, None, 100, True, db)
+            self.assertEqual(processes["count"], 1)
             self.assertEqual([item["state"] for item in history["items"]], ["active", "failed"])
 
 
