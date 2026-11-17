@@ -23,6 +23,14 @@ def _connection():
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=FULL")
         connection.execute("""
+            CREATE TABLE IF NOT EXISTS dead_letter_batches (
+                batch_id TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                rejected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        connection.execute("""
             CREATE TABLE IF NOT EXISTS pending_batches (
                 batch_id TEXT PRIMARY KEY,
                 payload_json TEXT NOT NULL,
@@ -63,3 +71,18 @@ def acknowledge_batch(batch_id):
         connection.execute(
             "DELETE FROM pending_batches WHERE batch_id = ?", (batch_id,)
         )
+
+
+
+def reject_batch(batch_id, reason):
+    """Move a permanently invalid batch to a local dead-letter table for inspection."""
+    with _connection() as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM pending_batches WHERE batch_id = ?", (batch_id,)
+        ).fetchone()
+        if row:
+            connection.execute(
+                "INSERT OR REPLACE INTO dead_letter_batches (batch_id, payload_json, reason) VALUES (?, ?, ?)",
+                (batch_id, row[0], str(reason)[:1000]),
+            )
+            connection.execute("DELETE FROM pending_batches WHERE batch_id = ?", (batch_id,))

@@ -15,7 +15,7 @@ import requests
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from outbox import acknowledge_batch, enqueue_batch, get_pending_batch
+from outbox import acknowledge_batch, enqueue_batch, get_pending_batch, reject_batch
 
 CENTRAL_URL = os.getenv("SENTINELX_URL", "http://127.0.0.1:8000").rstrip("/")
 BOOTSTRAP_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
@@ -245,11 +245,11 @@ def send_payload(metrics):
                 "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "sequence": sequence,
                 "metrics": metrics,
-                "events": batch,
+                "events": batch[:200],
             }
             # Only remove events after the exact payload is safely on disk.
             enqueue_batch(payload)
-            del events[:len(batch)]
+            del events[:min(len(batch), 200)]
     batch_size = len(payload["events"])
     try:
         response = requests.post(
@@ -261,8 +261,15 @@ def send_payload(metrics):
         response.raise_for_status()
         acknowledge_batch(payload["batch_id"])
         print(f"Telemetry acknowledged; events={batch_size}", flush=True)
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else 0
+        if status in (400, 413, 422):
+            reject_batch(payload["batch_id"], f"HTTP {status}: {exc}")
+            print(f"Telemetry batch moved to dead-letter queue after permanent HTTP {status}", flush=True)
+        else:
+            print(f"Telemetry delivery pending acknowledgement: {exc}", flush=True)
     except requests.RequestException as exc:
-        # The SQLite outbox preserves this exact payload across retries/restarts.
+        # Network failures and transient server errors retain the immutable batch.
         print(f"Telemetry delivery pending acknowledgement: {exc}", flush=True)
 
 

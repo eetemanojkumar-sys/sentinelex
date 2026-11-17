@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070d18"><title>SentinelX | Historical Intelligence</title>
+  <link rel="stylesheet" href="/dashboard/history.css"><script src="/dashboard/history.js" defer></script>
+</head>
+<body>
+  <header class="top"><a href="/dashboard/">← SentinelX Operations</a><div><strong>Historical Intelligence</strong><span>Machine and service investigation</span></div></header>
+  <main>
+    <section class="intro"><p class="eyebrow">HISTORICAL OPERATIONS</p><h1>Understand what happened.</h1><p>Explore retained telemetry, service state transitions, process snapshots and security events.</p></section>
+    <section class="controls">
+      <label>Machine<select id="host"><option value="">Loading machines…</option></select></label>
+      <label>From<input id="start" type="datetime-local"></label>
+      <label>To<input id="end" type="datetime-local"></label>
+      <button id="load">Load history</button>
+    </section>
+    <p id="status" role="status">Sign in using the administrator token already stored by the SentinelX dashboard.</p>
+    <section class="cards">
+      <article><span>Telemetry records</span><strong id="telemetry-count">—</strong></article>
+      <article><span>Security events</span><strong id="security-count">—</strong></article>
+      <article><span>Service transitions</span><strong id="service-count">—</strong></article>
+    </section>
+    <section class="panel"><div class="panel-head"><div><h2>Resource history</h2><p>CPU and memory samples retained by SentinelX</p></div></div><canvas id="metrics-chart" height="240"></canvas></section>
+    <section class="panel"><div class="panel-head"><div><h2>Service journey</h2><p>Only state changes are stored to keep history efficient</p></div></div><div class="table-wrap"><table><thead><tr><th>TIME</th><th>SERVICE</th><th>STATE</th><th>DETAILS</th></tr></thead><tbody id="services"><tr><td colspan="4">Choose a machine and load history.</td></tr></tbody></table></div></section>
+    <section class="panel"><div class="panel-head"><div><h2>Incident timeline</h2><p>Combined metrics, service transitions and security activity</p></div></div><div id="timeline" class="timeline"></div></section>
+    <section class="panel"><div class="panel-head"><div><h2>Process snapshots</h2><p>Processes present in the historical telemetry samples</p></div></div><div id="processes" class="process-grid"></div></section>
+    <footer>SentinelX · Historical records use server receipt time for legacy telemetry and agent collection time for service transitions.</footer>
+  </main>
+</body></html>

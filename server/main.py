@@ -20,6 +20,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 from sqlalchemy.sql import over
 
 BOOTSTRAP_TOKEN = os.getenv("SENTINELX_AGENT_TOKEN", "")
+ALLOW_LEGACY_BOOTSTRAP_INGEST = os.getenv("SENTINELX_ALLOW_LEGACY_BOOTSTRAP_INGEST", "false").lower() in {"1", "true", "yes"}
 ADMIN_TOKEN = os.getenv("SENTINELX_ADMIN_TOKEN", "")
 HISTORY_INTERVAL_SECONDS = max(60, int(os.getenv("SENTINELX_HISTORY_INTERVAL_SECONDS", "300")))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sentinelx.db")
@@ -110,6 +111,25 @@ class HostLatest(Base):
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class ServiceStateHistory(Base):
+    """Persist service state transitions instead of storing every repeated poll."""
+    __tablename__ = "service_state_history"
+    __table_args__ = (
+        UniqueConstraint("host_id", "service_name", "collected_at",
+                         name="uq_service_transition_time"),
+        Index("ix_service_history_host_time", "host_id", "collected_at"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(255), index=True)
+    service_name: Mapped[str] = mapped_column(String(255), index=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    state: Mapped[str] = mapped_column(String(80))
+    sub_state: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -181,8 +201,9 @@ def authenticate_agent(token: str | None, db: Session):
         if credential.revoked:
             raise HTTPException(status_code=401, detail="Agent credential revoked")
         return credential
-    # Temporary compatibility for agents not yet upgraded to per-agent enrollment.
-    if secrets.compare_digest(token, BOOTSTRAP_TOKEN):
+    # Explicit, temporary compatibility switch. Disabled by default because a shared
+    # bootstrap secret must never authorize arbitrary host IDs in normal operation.
+    if ALLOW_LEGACY_BOOTSTRAP_INGEST and secrets.compare_digest(token, BOOTSTRAP_TOKEN):
         return None
     raise HTTPException(status_code=401, detail="Invalid agent token")
 
@@ -247,6 +268,11 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
         raise HTTPException(status_code=403, detail="Host identity does not match enrolled agent")
 
     now = utcnow()
+    collected_at = payload.collected_at or now
+    if collected_at.tzinfo is None:
+        collected_at = collected_at.replace(tzinfo=timezone.utc)
+    if (collected_at - now).total_seconds() > 300:
+        collected_at = now
     if payload.batch_id:
         db.add(IngestedBatch(host_id=payload.host_id, batch_id=payload.batch_id))
         try:
@@ -274,6 +300,41 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
     if last_history is None or (now - last_history).total_seconds() >= HISTORY_INTERVAL_SECONDS:
         db.add(Telemetry(host_id=payload.host_id, received_at=now, metrics=payload.metrics))
 
+    # Service snapshots are emitted by both platform collectors. Store only state
+    # transitions so a fleet-wide poll does not create one row per service per cycle.
+    service_payload = (payload.metrics or {}).get("services") or {}
+    service_items = service_payload.get("items") if isinstance(service_payload, dict) else []
+    if isinstance(service_items, list):
+        for item in service_items[:500]:
+            if not isinstance(item, dict):
+                continue
+            service_name = str(item.get("name") or item.get("service_name") or "")[:255].strip()
+            state = str(item.get("status") or item.get("state") or "unknown")[:80].lower()
+            if not service_name:
+                continue
+            latest_state = db.scalar(
+                select(ServiceStateHistory)
+                .where(ServiceStateHistory.host_id == payload.host_id,
+                       ServiceStateHistory.service_name == service_name)
+                .order_by(desc(ServiceStateHistory.collected_at)).limit(1)
+            )
+            if latest_state is not None:
+                latest_time = latest_state.collected_at
+                if latest_time.tzinfo is None:
+                    latest_time = latest_time.replace(tzinfo=timezone.utc)
+                if collected_at <= latest_time or latest_state.state == state:
+                    continue
+            db.add(ServiceStateHistory(
+                host_id=payload.host_id, service_name=service_name,
+                display_name=(str(item.get("display_name") or "")[:255] or None),
+                state=state,
+                sub_state=(str(item.get("sub_state") or "")[:80] or None),
+                collected_at=collected_at, received_at=now,
+                details={k: item.get(k) for k in
+                         ("start_type", "username", "pid", "load_state")
+                         if item.get(k) is not None},
+            ))
+
     if payload.events:
         db.add_all([
             SecurityEvent(
@@ -290,6 +351,101 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
         "accepted": True, "host_id": payload.host_id,
         "events_received": len(payload.events),
     }
+
+
+def _normalize_dt(value):
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+@app.get("/api/v1/hosts/{host_id}/history/services")
+def service_history(host_id: str, start: datetime | None = None, end: datetime | None = None,
+                    limit: int = Query(default=500, ge=1, le=2000),
+                    _admin: bool = Depends(authenticate_admin),
+                    db: Session = Depends(db_session)):
+    """Return state transitions for one machine, oldest first."""
+    query = select(ServiceStateHistory).where(ServiceStateHistory.host_id == host_id)
+    if start:
+        query = query.where(ServiceStateHistory.collected_at >= _normalize_dt(start))
+    if end:
+        query = query.where(ServiceStateHistory.collected_at <= _normalize_dt(end))
+    rows = db.scalars(query.order_by(desc(ServiceStateHistory.collected_at)).limit(limit)).all()
+    return {"host_id": host_id, "count": len(rows), "items": [{
+        "service_name": row.service_name, "display_name": row.display_name,
+        "state": row.state, "sub_state": row.sub_state,
+        "collected_at": row.collected_at, "received_at": row.received_at,
+        "details": row.details or {},
+    } for row in reversed(rows)]}
+
+
+@app.get("/api/v1/hosts/{host_id}/history/processes")
+def process_history(host_id: str, start: datetime | None = None, end: datetime | None = None,
+                    limit: int = Query(default=100, ge=1, le=500),
+                    _admin: bool = Depends(authenticate_admin),
+                    db: Session = Depends(db_session)):
+    """Read process snapshots already retained inside historical telemetry JSON."""
+    query = select(Telemetry).where(Telemetry.host_id == host_id)
+    if start:
+        query = query.where(Telemetry.received_at >= _normalize_dt(start))
+    if end:
+        query = query.where(Telemetry.received_at <= _normalize_dt(end))
+    rows = db.scalars(query.order_by(desc(Telemetry.received_at)).limit(limit)).all()
+    samples = []
+    for row in reversed(rows):
+        processes = (row.metrics or {}).get("processes") or []
+        if processes:
+            samples.append({"recorded_at": row.received_at, "processes": processes[:200]})
+    return {"host_id": host_id, "count": len(samples), "samples": samples}
+
+
+@app.get("/api/v1/hosts/{host_id}/timeline")
+def host_timeline(host_id: str, start: datetime | None = None, end: datetime | None = None,
+                  limit: int = Query(default=500, ge=1, le=2000),
+                  _admin: bool = Depends(authenticate_admin),
+                  db: Session = Depends(db_session)):
+    """Combine service transitions, security events and retained metric samples."""
+    start_dt, end_dt = _normalize_dt(start), _normalize_dt(end)
+    sq = select(ServiceStateHistory).where(ServiceStateHistory.host_id == host_id)
+    eq = select(SecurityEvent).where(SecurityEvent.host_id == host_id)
+    mq = select(Telemetry).where(Telemetry.host_id == host_id)
+    if start_dt:
+        sq = sq.where(ServiceStateHistory.collected_at >= start_dt)
+        eq = eq.where(SecurityEvent.created_at >= start_dt)
+        mq = mq.where(Telemetry.received_at >= start_dt)
+    if end_dt:
+        sq = sq.where(ServiceStateHistory.collected_at <= end_dt)
+        eq = eq.where(SecurityEvent.created_at <= end_dt)
+        mq = mq.where(Telemetry.received_at <= end_dt)
+    services = db.scalars(sq.order_by(desc(ServiceStateHistory.collected_at)).limit(limit)).all()
+    security = db.scalars(eq.order_by(desc(SecurityEvent.created_at)).limit(limit)).all()
+    metrics = db.scalars(mq.order_by(desc(Telemetry.received_at)).limit(limit)).all()
+    items = []
+    for row in services:
+        items.append({"timestamp": row.collected_at, "category": "service",
+                      "name": row.service_name, "state": row.state,
+                      "message": f"{row.service_name} changed to {row.state}"})
+    for row in security:
+        items.append({"timestamp": row.created_at, "category": "security",
+                      "name": row.event_type, "state": row.severity, "message": row.message})
+    for row in metrics:
+        data = row.metrics or {}
+        memory = data.get("memory") or {}
+        items.append({"timestamp": row.received_at, "category": "metrics",
+                      "name": "resource_sample", "state": "sample",
+                      "message": f"CPU {data.get('cpu_percent', 'n/a')}%, memory {memory.get('percent', 'n/a')}%"})
+    items.sort(key=lambda item: _normalize_dt(item["timestamp"]))
+    return {"host_id": host_id, "count": len(items), "items": items[-limit:]}
+
+
+@app.get("/api/v1/history/capabilities")
+def history_capabilities(_admin: bool = Depends(authenticate_admin),
+                         db: Session = Depends(db_session)):
+    return {"sources": {
+        "telemetry": db.scalar(select(func.count()).select_from(Telemetry)) or 0,
+        "security_events": db.scalar(select(func.count()).select_from(SecurityEvent)) or 0,
+        "service_transitions": db.scalar(select(func.count()).select_from(ServiceStateHistory)) or 0,
+    }, "process_history_note": "Process snapshots are available for retained telemetry rows containing a processes array."}
 
 
 @app.get("/api/v1/hosts")
