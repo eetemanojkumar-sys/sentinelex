@@ -130,6 +130,50 @@ class ServiceStateHistory(Base):
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class LogRecord(Base):
+    """Normalized, searchable endpoint log records with overlap-safe deduplication."""
+    __tablename__ = "log_records"
+    __table_args__ = (
+        UniqueConstraint("host_id", "fingerprint", name="uq_log_host_fingerprint"),
+        Index("ix_logs_host_time", "host_id", "occurred_at"),
+        Index("ix_logs_severity_time", "severity", "occurred_at"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(255), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(128), index=True)
+    channel: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    severity: Mapped[str] = mapped_column(String(20), default="info", index=True)
+    event_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    record_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    message: Mapped[str] = mapped_column(String(4000))
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Incident(Base):
+    """Persistent rule-based incident lifecycle and correlated evidence."""
+    __tablename__ = "incidents"
+    __table_args__ = (
+        UniqueConstraint("host_id", "incident_key", name="uq_incident_host_key"),
+        Index("ix_incidents_status_severity", "status", "severity"),
+        Index("ix_incidents_host_last_seen", "host_id", "last_seen"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host_id: Mapped[str] = mapped_column(String(255), index=True)
+    incident_key: Mapped[str] = mapped_column(String(255))
+    title: Mapped[str] = mapped_column(String(255))
+    severity: Mapped[str] = mapped_column(String(20), default="medium", index=True)
+    status: Mapped[str] = mapped_column(String(20), default="open", index=True)
+    summary: Mapped[str] = mapped_column(String(2000))
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -153,6 +197,17 @@ class EventIn(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class LogIn(BaseModel):
+    source: str = Field(min_length=1, max_length=128)
+    channel: str | None = Field(default=None, max_length=64)
+    severity: str = Field(default="info", pattern="^(info|low|medium|warning|high|critical|error)$")
+    event_id: str | None = Field(default=None, max_length=80)
+    record_id: str | None = Field(default=None, max_length=128)
+    message: str = Field(min_length=1, max_length=4000)
+    timestamp: datetime | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
 class TelemetryIn(BaseModel):
     host_id: str = Field(min_length=1, max_length=255)
     batch_id: str | None = Field(default=None, min_length=1, max_length=64)
@@ -162,6 +217,7 @@ class TelemetryIn(BaseModel):
     sequence: int = Field(default=0, ge=0)
     metrics: dict[str, Any]
     events: list[EventIn] = Field(default_factory=list, max_length=500)
+    logs: list[LogIn] = Field(default_factory=list, max_length=250)
 
 
 class EnrollmentIn(BaseModel):
@@ -350,12 +406,38 @@ def ingest(payload: TelemetryIn, x_agent_token: str | None = Header(default=None
             )
             for event in payload.events
         ])
+
+    logs_received = 0
+    for item in payload.logs:
+        occurred_at = _normalize_dt(item.timestamp) or collected_at
+        if (occurred_at - now).total_seconds() > 300:
+            occurred_at = now
+        fingerprint = _log_fingerprint(payload.host_id, item, occurred_at)
+        exists = db.scalar(select(LogRecord.id).where(
+            LogRecord.host_id == payload.host_id,
+            LogRecord.fingerprint == fingerprint,
+        ))
+        if exists:
+            continue
+        row = LogRecord(
+            host_id=payload.host_id, fingerprint=fingerprint,
+            source=item.source, channel=item.channel, severity=item.severity,
+            event_id=item.event_id, record_id=item.record_id,
+            message=item.message, details=item.details,
+            occurred_at=occurred_at, received_at=now,
+        )
+        db.add(row)
+        db.flush()
+        _evaluate_log_rules(db, payload.host_id, row, now)
+        logs_received += 1
+
+    _evaluate_metric_rules(db, payload.host_id, payload.metrics or {}, now)
     if credential:
         credential.last_seen = now
     db.commit()
     return {
         "accepted": True, "host_id": payload.host_id,
-        "events_received": len(payload.events),
+        "events_received": len(payload.events), "logs_received": logs_received,
     }
 
 
@@ -363,6 +445,190 @@ def _normalize_dt(value):
     if value is None:
         return None
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def _log_fingerprint(host_id: str, item: LogIn, occurred_at: datetime) -> str:
+    stable = "|".join((
+        host_id, item.source, item.channel or "", item.event_id or "",
+        item.record_id or "", occurred_at.isoformat(), item.message,
+    ))
+    return hashlib.sha256(stable.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _upsert_incident(db: Session, host_id: str, incident_key: str, title: str,
+                     severity: str, summary: str, evidence: dict[str, Any],
+                     now: datetime):
+    incident = db.scalar(select(Incident).where(
+        Incident.host_id == host_id,
+        Incident.incident_key == incident_key,
+        Incident.status.in_(("open", "investigating")),
+    ))
+    if incident:
+        incident.severity = severity
+        incident.summary = summary[:2000]
+        incident.last_seen = now
+        incident.occurrence_count += 1
+        current = list(incident.evidence or [])
+        current.append(evidence)
+        incident.evidence = current[-20:]
+    else:
+        incident = Incident(
+            host_id=host_id, incident_key=incident_key, title=title[:255],
+            severity=severity, status="open", summary=summary[:2000],
+            evidence=[evidence], occurrence_count=1,
+            first_seen=now, last_seen=now,
+        )
+        db.add(incident)
+    return incident
+
+
+def _resolve_incident_rule(db: Session, host_id: str, incident_key: str, now: datetime):
+    rows = db.scalars(select(Incident).where(
+        Incident.host_id == host_id,
+        Incident.incident_key == incident_key,
+        Incident.status.in_(("open", "investigating")),
+    )).all()
+    for incident in rows:
+        incident.status = "resolved"
+        incident.resolved_at = now
+        incident.last_seen = now
+
+
+def _evaluate_metric_rules(db: Session, host_id: str, metrics: dict[str, Any], now: datetime):
+    """Conservative fixed rules; repeated samples update one active incident."""
+    cpu = metrics.get("cpu_percent")
+    if isinstance(cpu, (int, float)):
+        key = "metric:cpu_high"
+        if cpu >= 90:
+            _upsert_incident(db, host_id, key, "Sustained high CPU utilization",
+                             "critical" if cpu >= 95 else "high",
+                             f"CPU utilization is {cpu:.1f}%. Review top processes and recent workload changes.",
+                             {"rule": "cpu_percent>=90", "cpu_percent": cpu}, now)
+        else:
+            _resolve_incident_rule(db, host_id, key, now)
+
+    memory = metrics.get("memory") or {}
+    mem = memory.get("percent") if isinstance(memory, dict) else None
+    if isinstance(mem, (int, float)):
+        key = "metric:memory_high"
+        if mem >= 90:
+            _upsert_incident(db, host_id, key, "High memory utilization",
+                             "critical" if mem >= 95 else "high",
+                             f"Memory utilization is {mem:.1f}%. Inspect process memory and available capacity.",
+                             {"rule": "memory.percent>=90", "memory_percent": mem}, now)
+        else:
+            _resolve_incident_rule(db, host_id, key, now)
+
+    disk = metrics.get("disk") or {}
+    if isinstance(disk, dict):
+        for mountpoint, usage in list(disk.items())[:100]:
+            if not isinstance(usage, dict) or not isinstance(usage.get("percent"), (int, float)):
+                continue
+            percent = usage["percent"]
+            key = f"metric:disk:{str(mountpoint)[:180]}"
+            if percent >= 80:
+                _upsert_incident(db, host_id, key, f"Disk capacity warning: {str(mountpoint)[:150]}",
+                                 "critical" if percent >= 95 else "high" if percent >= 90 else "medium",
+                                 f"Disk usage on {mountpoint} is {percent:.1f}%. Review growth and clean-up options.",
+                                 {"rule": "disk.percent>=80", "mountpoint": str(mountpoint), "percent": percent}, now)
+            else:
+                _resolve_incident_rule(db, host_id, key, now)
+
+
+def _evaluate_log_rules(db: Session, host_id: str, log: LogRecord, now: datetime):
+    if log.severity not in {"high", "critical", "error"}:
+        return
+    event_key = (log.event_id or log.source).replace(":", "_")[:80]
+    key = f"log:{log.source[:100]}:{event_key}"
+    _upsert_incident(db, host_id, key, f"High-severity log: {log.source[:100]}",
+                     "critical" if log.severity == "critical" else "high",
+                     log.message, {"source": log.source, "channel": log.channel,
+                                   "event_id": log.event_id, "log_id": log.id,
+                                   "message": log.message[:1000]}, now)
+
+
+@app.get("/api/v1/logs")
+def search_logs(host_id: str | None = Query(default=None, max_length=255),
+                severity: str | None = Query(default=None, max_length=20),
+                source: str | None = Query(default=None, max_length=128),
+                q: str | None = Query(default=None, max_length=200),
+                start: datetime | None = None, end: datetime | None = None,
+                limit: int = Query(default=100, ge=1, le=500),
+                offset: int = Query(default=0, ge=0),
+                _admin: bool = Depends(authenticate_admin),
+                db: Session = Depends(db_session)):
+    """Search retained endpoint logs with bounded filters and pagination."""
+    query = select(LogRecord)
+    if host_id:
+        query = query.where(LogRecord.host_id == host_id)
+    if severity:
+        query = query.where(LogRecord.severity == severity.lower())
+    if source:
+        query = query.where(LogRecord.source.ilike(f"%{source[:128]}%"))
+    if q:
+        query = query.where(LogRecord.message.ilike(f"%{q[:200]}%"))
+    if start:
+        query = query.where(LogRecord.occurred_at >= _normalize_dt(start))
+    if end:
+        query = query.where(LogRecord.occurred_at <= _normalize_dt(end))
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    rows = db.scalars(query.order_by(desc(LogRecord.occurred_at))
+                      .offset(offset).limit(limit)).all()
+    return {"count": len(rows), "total": total, "limit": limit, "offset": offset,
+            "items": [{
+                "id": row.id, "host_id": row.host_id, "source": row.source,
+                "channel": row.channel, "severity": row.severity,
+                "event_id": row.event_id, "record_id": row.record_id,
+                "message": row.message, "details": row.details or {},
+                "occurred_at": row.occurred_at, "received_at": row.received_at,
+            } for row in rows]}
+
+
+@app.get("/api/v1/incidents")
+def list_incidents(host_id: str | None = Query(default=None, max_length=255),
+                   status: str | None = Query(default=None, pattern="^(open|investigating|resolved)$"),
+                   severity: str | None = Query(default=None, pattern="^(low|medium|high|critical)$"),
+                   limit: int = Query(default=100, ge=1, le=500),
+                   offset: int = Query(default=0, ge=0),
+                   _admin: bool = Depends(authenticate_admin),
+                   db: Session = Depends(db_session)):
+    query = select(Incident)
+    if host_id:
+        query = query.where(Incident.host_id == host_id)
+    if status:
+        query = query.where(Incident.status == status)
+    if severity:
+        query = query.where(Incident.severity == severity)
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    rows = db.scalars(query.order_by(desc(Incident.last_seen))
+                      .offset(offset).limit(limit)).all()
+    return {"count": len(rows), "total": total, "items": [{
+        "id": row.id, "host_id": row.host_id, "incident_key": row.incident_key,
+        "title": row.title, "severity": row.severity, "status": row.status,
+        "summary": row.summary, "evidence": row.evidence or [],
+        "occurrence_count": row.occurrence_count, "first_seen": row.first_seen,
+        "last_seen": row.last_seen, "resolved_at": row.resolved_at,
+    } for row in rows]}
+
+
+class IncidentStatusIn(BaseModel):
+    status: str = Field(pattern="^(open|investigating|resolved)$")
+
+
+@app.post("/api/v1/incidents/{incident_id}/status")
+def update_incident_status(incident_id: int, payload: IncidentStatusIn,
+                           _admin: bool = Depends(authenticate_admin),
+                           db: Session = Depends(db_session)):
+    incident = db.get(Incident, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    incident.status = payload.status
+    incident.resolved_at = utcnow() if payload.status == "resolved" else None
+    db.commit()
+    db.refresh(incident)
+    return {"id": incident.id, "host_id": incident.host_id,
+            "status": incident.status, "severity": incident.severity,
+            "resolved_at": incident.resolved_at}
 
 
 @app.get("/api/v1/hosts/{host_id}/history/services")
